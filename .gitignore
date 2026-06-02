@@ -1,0 +1,40 @@
+# Secrets
+.env
+.env.local
+
+# Python
+pipeline/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Data — DB and caches are generated, not committed
+pipeline/data/*.db
+pipeline/data/*.db.bak
+pipeline/data/*.db-journal
+pipeline/data/*.db-wal
+pipeline/data/cache/
+
+# Runtime spend logs (append-only, regenerated at runtime)
+pipeline/data/cost_log.jsonl
+pipeline/data/chat_cost_log.jsonl
+
+# Keep snapshots dir but not its contents (raw HTML can be large)
+pipeline/data/snapshots/*
+!pipeline/data/snapshots/.gitkeep
+
+# Node / Next.js
+node_modules/
+web/.next/
+web/out/
+web/.turbo/
+*.tsbuildinfo
+
+# Test / coverage artifacts
+web/coverage/
+web/test-results/
+web/playwright-report/
+
+# OS
+.DS_Store
