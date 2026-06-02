@@ -1,0 +1,588 @@
+import Database from "better-sqlite3";
+import path from "node:path";
+
+// The pipeline owns all writes. The web app opens the SAME SQLite file
+// strictly READ-ONLY — it must never mutate the research database.
+const DB_PATH = path.join(process.cwd(), "..", "pipeline", "data", "titans.db");
+
+let _db: Database.Database | null = null;
+
+function db(): Database.Database {
+  if (_db) return _db;
+  _db = new Database(DB_PATH, { readonly: true, fileMustExist: true });
+  _db.pragma("query_only = true");
+  return _db;
+}
+
+export interface Person {
+  id: number;
+  full_name: string;
+  name_slug: string;
+  titan_class: number;
+  school: string;
+  initial_company: string;
+  city: string;
+  source_url: string;
+  needs_review: number;
+}
+
+export interface DirectoryFilters {
+  q?: string;
+  school?: string;
+  titanClass?: number;
+}
+
+const COLUMNS =
+  "id, full_name, name_slug, titan_class, school, initial_company, city, source_url, needs_review";
+
+export function listPeople(filters: DirectoryFilters): Person[] {
+  const where: string[] = [];
+  const params: Record<string, unknown> = {};
+
+  if (filters.q) {
+    where.push("(full_name LIKE :q OR initial_company LIKE :q OR city LIKE :q)");
+    params.q = `%${filters.q}%`;
+  }
+  if (filters.school) {
+    where.push("school = :school");
+    params.school = filters.school;
+  }
+  if (filters.titanClass !== undefined) {
+    where.push("titan_class = :titanClass");
+    params.titanClass = filters.titanClass;
+  }
+
+  const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const sql = `SELECT ${COLUMNS} FROM people ${clause}
+    ORDER BY school, titan_class, full_name`;
+  return db().prepare(sql).all(params) as Person[];
+}
+
+export function getPersonBySlug(slug: string): Person | undefined {
+  return db()
+    .prepare(`SELECT ${COLUMNS} FROM people WHERE name_slug = ? ORDER BY titan_class LIMIT 1`)
+    .get(slug) as Person | undefined;
+}
+
+export function listSchools(): string[] {
+  const rows = db()
+    .prepare("SELECT DISTINCT school FROM people ORDER BY school")
+    .all() as { school: string }[];
+  return rows.map((r) => r.school);
+}
+
+export interface ClassOption {
+  school: string;
+  titan_class: number;
+  count: number;
+}
+
+export function listClasses(): ClassOption[] {
+  return db()
+    .prepare(
+      `SELECT school, titan_class, COUNT(*) AS count
+       FROM people GROUP BY school, titan_class
+       ORDER BY school, titan_class`
+    )
+    .all() as ClassOption[];
+}
+
+export interface DirectoryStats {
+  total: number;
+  schools: number;
+  classes: number;
+  cities: number;
+  enriched: number;
+  claims: number;
+  sources: number;
+}
+
+export function directoryStats(): DirectoryStats {
+  const base = db()
+    .prepare(
+      `SELECT COUNT(*) AS total,
+              COUNT(DISTINCT school) AS schools,
+              COUNT(DISTINCT school || '|' || titan_class) AS classes,
+              COUNT(DISTINCT CASE WHEN city <> '(unknown)' THEN city END) AS cities
+       FROM people`
+    )
+    .get() as Omit<DirectoryStats, "enriched" | "claims" | "sources">;
+  const enr = db()
+    .prepare(
+      `SELECT COUNT(DISTINCT person_id) AS enriched, COUNT(*) AS claims FROM claims`
+    )
+    .get() as { enriched: number; claims: number };
+  const src = db()
+    .prepare(`SELECT COUNT(*) AS sources FROM person_sources`)
+    .get() as { sources: number };
+  return { ...base, ...enr, ...src };
+}
+
+export interface SchoolBreakdown {
+  school: string;
+  count: number;
+}
+
+export function schoolBreakdown(): SchoolBreakdown[] {
+  return db()
+    .prepare(
+      `SELECT school, COUNT(*) AS count FROM people
+       GROUP BY school ORDER BY count DESC`
+    )
+    .all() as SchoolBreakdown[];
+}
+
+export interface FirmBreakdown {
+  company: string;
+  count: number;
+}
+
+// The directory's initial_company column is polluted with a handful of
+// school-name artifacts from upstream parsing; exclude them so the
+// "top firms" view reflects actual employers.
+const FIRM_EXCLUDE = ["University of Texas", "Texas A&M", "Baylor University"];
+
+export function topFirms(limit = 10): FirmBreakdown[] {
+  const placeholders = FIRM_EXCLUDE.map(() => "?").join(", ");
+  return db()
+    .prepare(
+      `SELECT initial_company AS company, COUNT(*) AS count FROM people
+       WHERE initial_company <> '' AND initial_company <> '(unknown)'
+         AND initial_company NOT IN (${placeholders})
+       GROUP BY initial_company ORDER BY count DESC LIMIT ?`
+    )
+    .all(...FIRM_EXCLUDE, limit) as FirmBreakdown[];
+}
+
+export function distinctEmployers(): number {
+  const placeholders = FIRM_EXCLUDE.map(() => "?").join(", ");
+  const row = db()
+    .prepare(
+      `SELECT COUNT(DISTINCT initial_company) AS n FROM people
+       WHERE initial_company <> '' AND initial_company <> '(unknown)'
+         AND initial_company NOT IN (${placeholders})`
+    )
+    .get(...FIRM_EXCLUDE) as { n: number };
+  return row.n;
+}
+
+export interface SectorBreakdown {
+  sector: string;
+  count: number;
+}
+
+// Sector concentration, measured from the fully-populated initial_company
+// column (every alum has a first employer). Firms are bucketed by keyword;
+// anything unmatched falls into "Other / Operating". Read-only — no pipeline
+// pass needed. Ordered longest-keyword-first inside each bucket isn't required
+// since the first matching sector wins per firm.
+const SECTOR_RULES: { sector: string; keywords: string[] }[] = [
+  {
+    sector: "Investment Banking",
+    keywords: [
+      "goldman",
+      "morgan stanley",
+      "j.p. morgan",
+      "jp morgan",
+      "jpmorgan",
+      "bank of america",
+      "merrill",
+      "citi",
+      "credit suisse",
+      "barclays",
+      "ubs",
+      "deutsche bank",
+      "lazard",
+      "evercore",
+      "moelis",
+      "jefferies",
+      "houlihan",
+      "rbc",
+      "wells fargo",
+      "raymond james",
+      "piper",
+      "guggenheim",
+      "centerview",
+    ],
+  },
+  {
+    sector: "Consulting",
+    keywords: [
+      "mckinsey",
+      "bain",
+      "boston consulting",
+      "bcg",
+      "accenture",
+      "oliver wyman",
+      "l.e.k",
+      "booz",
+      "alvarez",
+      "ats",
+      "consulting",
+    ],
+  },
+  {
+    sector: "Accounting & Audit",
+    keywords: [
+      "pwc",
+      "pricewaterhouse",
+      "deloitte",
+      "ernst",
+      "kpmg",
+      "grant thornton",
+      "bdo",
+      "ey",
+    ],
+  },
+  {
+    sector: "Private Equity & Credit",
+    keywords: [
+      "blackstone",
+      "kkr",
+      "carlyle",
+      "apollo",
+      "tpg",
+      "vista",
+      "warburg",
+      "ares",
+      "bain capital",
+      "private equity",
+      "capital partners",
+      "partners",
+      "holdings",
+      "equity",
+    ],
+  },
+  {
+    sector: "Hedge Funds & Asset Mgmt",
+    keywords: [
+      "citadel",
+      "bridgewater",
+      "point72",
+      "millennium",
+      "fidelity",
+      "blackrock",
+      "vanguard",
+      "pimco",
+      "wellington",
+      "capital management",
+      "asset management",
+      "investment management",
+      "advisors",
+      "capital group",
+    ],
+  },
+  {
+    sector: "Energy & Real Assets",
+    keywords: [
+      "exxon",
+      "chevron",
+      "conocophillips",
+      "phillips 66",
+      "halliburton",
+      "schlumberger",
+      "encap",
+      "quantum",
+      "kinder morgan",
+      "energy",
+      "petroleum",
+      "oil",
+      "gas",
+      "resources",
+      "midstream",
+    ],
+  },
+];
+
+function classifySector(company: string): string {
+  const c = company.toLowerCase();
+  for (const rule of SECTOR_RULES) {
+    if (rule.keywords.some((k) => c.includes(k))) return rule.sector;
+  }
+  return "Other / Operating";
+}
+
+// Valid sector labels the chat planner may request. Kept in sync with
+// SECTOR_RULES so an unknown/garbage sector string from the model is ignored
+// rather than silently matching nothing.
+export const SECTOR_NAMES: readonly string[] = SECTOR_RULES.map((r) => r.sector);
+
+export interface PeopleSearchParams {
+  city?: string;
+  school?: string;
+  titanClass?: number;
+  companyKeyword?: string;
+  // One of SECTOR_NAMES. Maps to that bucket's keyword OR-list.
+  sector?: string;
+  limit?: number;
+}
+
+const SEARCH_MAX_ROWS = 12;
+
+// Grounded retrieval for the alumni chat. ALL SQL is owned and parameterized
+// here — the model only ever produces typed params, never SQL. Read-only.
+export function searchPeople(params: PeopleSearchParams): Person[] {
+  const where: string[] = [];
+  const bind: Record<string, unknown> = {};
+
+  if (params.city && params.city.trim()) {
+    where.push("city LIKE :city");
+    bind.city = `%${params.city.trim()}%`;
+  }
+  if (params.school && params.school.trim()) {
+    where.push("school LIKE :school");
+    bind.school = `%${params.school.trim()}%`;
+  }
+  if (params.titanClass !== undefined && Number.isFinite(params.titanClass)) {
+    where.push("titan_class = :titanClass");
+    bind.titanClass = params.titanClass;
+  }
+  if (params.companyKeyword && params.companyKeyword.trim()) {
+    where.push("initial_company LIKE :company");
+    bind.company = `%${params.companyKeyword.trim()}%`;
+  }
+
+  // Sector maps to an OR-list of LIKE clauses over the bucket's keywords.
+  // Only a recognized sector name is honored.
+  if (params.sector && SECTOR_NAMES.includes(params.sector)) {
+    const rule = SECTOR_RULES.find((r) => r.sector === params.sector);
+    if (rule) {
+      const ors: string[] = [];
+      rule.keywords.forEach((kw, i) => {
+        const key = `sec${i}`;
+        ors.push(`initial_company LIKE :${key}`);
+        bind[key] = `%${kw}%`;
+      });
+      if (ors.length) where.push(`(${ors.join(" OR ")})`);
+    }
+  }
+
+  const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const rawLimit = params.limit ?? SEARCH_MAX_ROWS;
+  const limit = Math.max(1, Math.min(SEARCH_MAX_ROWS, Math.floor(rawLimit)));
+
+  // Prefer enriched alumni (those with claims) so answers can cite detail,
+  // then by school/class for stable ordering.
+  const sql = `SELECT ${COLUMNS},
+      (SELECT COUNT(*) FROM claims c WHERE c.person_id = people.id) AS claim_count
+    FROM people
+    ${clause}
+    ORDER BY claim_count DESC, school, titan_class, full_name
+    LIMIT :limit`;
+  bind.limit = limit;
+  return db().prepare(sql).all(bind) as Person[];
+}
+
+export interface SlugClaim {
+  name_slug: string;
+  claim_type: string;
+  value: string;
+  source_url: string;
+  quote: string;
+  confidence: number;
+}
+
+// Attach enriched, source-attributed claims to a set of result slugs so the
+// synthesis step can ground specific career facts. Read-only, parameterized.
+export function claimsForSlugs(slugs: string[]): SlugClaim[] {
+  const clean = slugs.filter((s) => typeof s === "string" && s.length > 0);
+  if (clean.length === 0) return [];
+  const placeholders = clean.map(() => "?").join(", ");
+  return db()
+    .prepare(
+      `SELECT p.name_slug, c.claim_type, c.value, c.source_url, c.quote, c.confidence
+       FROM claims c JOIN people p ON p.id = c.person_id
+       WHERE p.name_slug IN (${placeholders})
+         AND c.claim_type <> 'news_mention'
+       ORDER BY p.name_slug, c.confidence DESC`
+    )
+    .all(...clean) as SlugClaim[];
+}
+
+export function sectorBreakdown(): SectorBreakdown[] {
+  const placeholders = FIRM_EXCLUDE.map(() => "?").join(", ");
+  const rows = db()
+    .prepare(
+      `SELECT initial_company AS company, COUNT(*) AS count FROM people
+       WHERE initial_company <> '' AND initial_company <> '(unknown)'
+         AND initial_company NOT IN (${placeholders})
+       GROUP BY initial_company`
+    )
+    .all(...FIRM_EXCLUDE) as FirmBreakdown[];
+
+  const tally = new Map<string, number>();
+  for (const { company, count } of rows) {
+    const sector = classifySector(company);
+    tally.set(sector, (tally.get(sector) ?? 0) + count);
+  }
+  return [...tally.entries()]
+    .map(([sector, count]) => ({ sector, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+export interface ClassSpread {
+  titan_class: number;
+  count: number;
+}
+
+export function classSpread(): ClassSpread[] {
+  return db()
+    .prepare(
+      `SELECT titan_class, COUNT(*) AS count FROM people
+       GROUP BY titan_class ORDER BY titan_class`
+    )
+    .all() as ClassSpread[];
+}
+
+export interface GeoSpread {
+  city: string;
+  count: number;
+}
+
+export function geoSpread(limit = 8): GeoSpread[] {
+  return db()
+    .prepare(
+      `SELECT city, COUNT(*) AS count FROM people
+       WHERE city <> '' AND city <> '(unknown)'
+       GROUP BY city ORDER BY count DESC LIMIT ?`
+    )
+    .all(limit) as GeoSpread[];
+}
+
+export interface EnrichedPerson {
+  name_slug: string;
+  full_name: string;
+  initial_company: string;
+  school: string;
+  titan_class: number;
+  claim_count: number;
+}
+
+export function recentlyEnriched(limit = 6): EnrichedPerson[] {
+  return db()
+    .prepare(
+      `SELECT p.name_slug, p.full_name, p.initial_company, p.school,
+              p.titan_class, COUNT(c.id) AS claim_count
+       FROM people p JOIN claims c ON c.person_id = p.id
+       GROUP BY p.id ORDER BY claim_count DESC LIMIT ?`
+    )
+    .all(limit) as EnrichedPerson[];
+}
+
+export interface NewsMention {
+  name_slug: string;
+  full_name: string;
+  school: string;
+  titan_class: number;
+  value: string;
+  source_url: string;
+  quote: string;
+}
+
+// news_mention claims are name-matched (GNews), NOT identity-verified —
+// surfaced in a clearly-labeled "In the news" view, never the verified résumé.
+export function recentNews(limit = 40): NewsMention[] {
+  return db()
+    .prepare(
+      `SELECT p.name_slug, p.full_name, p.school, p.titan_class,
+              c.value, c.source_url, c.quote
+       FROM claims c JOIN people p ON p.id = c.person_id
+       WHERE c.claim_type = 'news_mention'
+       ORDER BY c.value DESC LIMIT ?`
+    )
+    .all(limit) as NewsMention[];
+}
+
+export function newsCount(): number {
+  const row = db()
+    .prepare(`SELECT COUNT(*) AS n FROM claims WHERE claim_type = 'news_mention'`)
+    .get() as { n: number };
+  return row.n;
+}
+
+export interface Claim {
+  claim_type: string;
+  value: string;
+  source_url: string;
+  quote: string;
+  confidence: number;
+  extraction_method: string;
+}
+
+export function getClaimsForPerson(personId: number): Claim[] {
+  return db()
+    .prepare(
+      `SELECT claim_type, value, source_url, quote, confidence, extraction_method
+       FROM claims WHERE person_id = ?
+       ORDER BY claim_type, confidence DESC`
+    )
+    .all(personId) as Claim[];
+}
+
+// The Phase-3 aggregate roll-up (one row per year, written by the pipeline's
+// phase3_insights pass). Mirrors pipeline/insights_store.InsightsSnapshot. The
+// scalar columns plus the deserialized JSON payload drive the real half of the
+// "Overview & Insights" view once enrichment coverage is high enough that the
+// pipeline flips is_sample to 0.
+export interface InsightsSnapshot {
+  snapshot_year: number;
+  people_total: number;
+  enriched_count: number;
+  coverage: number;
+  is_sample: boolean;
+  narrative: string;
+  landing_firms: { company: string; count: number }[];
+  current_titles: { title: string; count: number }[];
+  seniority: { tier: string; count: number }[];
+  signature_stats: { label: string; value: string; detail: string; pct: number }[];
+  founders_partners: number;
+}
+
+interface SnapshotRow {
+  snapshot_year: number;
+  people_total: number;
+  enriched_count: number;
+  coverage: number;
+  is_sample: number;
+  narrative: string;
+  payload: string;
+}
+
+// The insights_snapshot table does not exist until the pipeline's phase3 pass
+// has run at least once. Until then this returns null and the web keeps its
+// seeded illustration — never throws on the missing table.
+export function latestInsightsSnapshot(): InsightsSnapshot | null {
+  let row: SnapshotRow | undefined;
+  try {
+    row = db()
+      .prepare(
+        "SELECT snapshot_year, people_total, enriched_count, coverage, is_sample, narrative, payload FROM insights_snapshot ORDER BY snapshot_year DESC LIMIT 1"
+      )
+      .get() as SnapshotRow | undefined;
+  } catch {
+    return null;
+  }
+  if (!row) return null;
+
+  const payload = JSON.parse(row.payload) as {
+    landing_firms?: { company: string; count: number }[];
+    current_titles?: { title: string; count: number }[];
+    seniority?: { tier: string; count: number }[];
+    signature_stats?: { label: string; value: string; detail: string; pct: number }[];
+    founders_partners?: number;
+  };
+
+  return {
+    snapshot_year: row.snapshot_year,
+    people_total: row.people_total,
+    enriched_count: row.enriched_count,
+    coverage: row.coverage,
+    is_sample: Boolean(row.is_sample),
+    narrative: row.narrative,
+    landing_firms: payload.landing_firms ?? [],
+    current_titles: payload.current_titles ?? [],
+    seniority: payload.seniority ?? [],
+    signature_stats: payload.signature_stats ?? [],
+    founders_partners: payload.founders_partners ?? 0,
+  };
+}
