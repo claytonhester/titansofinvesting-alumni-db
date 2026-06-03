@@ -1,9 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 
-// Haiku 4.5 rates — kept in sync with pipeline/cost_log.py.
-const HAIKU_USD_PER_MTOK_IN = 1.0;
-const HAIKU_USD_PER_MTOK_OUT = 5.0;
+// Haiku 4.5 rates — kept in sync with pipeline/cost_log.py. Overridable via env
+// so a published price change can't silently make the spend cap wrong; an
+// absent, non-numeric, or non-positive value falls back to the default.
+function priceFromEnv(value: string | undefined, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+const HAIKU_USD_PER_MTOK_IN = priceFromEnv(
+  process.env.HAIKU_USD_PER_MTOK_IN,
+  1.0
+);
+const HAIKU_USD_PER_MTOK_OUT = priceFromEnv(
+  process.env.HAIKU_USD_PER_MTOK_OUT,
+  5.0
+);
 
 // Hard monthly spend cap (USD) for the public chat endpoint. At/above this,
 // the kill switch fires and NO Anthropic call is made.
@@ -41,8 +53,14 @@ function currentMonth(now: Date = new Date()): string {
   return now.toISOString().slice(0, 7); // YYYY-MM
 }
 
-// Sum this calendar month's spend from the append-only log. Missing file or a
-// malformed line is treated as zero / skipped — never throws to the caller.
+// Sum this calendar month's spend from the append-only log.
+//
+// Fail-CLOSED on anything that means we can't trust the total: a genuinely
+// missing file is the only "this is fine, $0 spent" case (returns 0). A read
+// error (permissions, I/O, a directory) or a non-empty file whose every line
+// fails to parse is corruption — it throws, and isOverCap() converts that into
+// "over cap" so a broken log can never silently disable the kill switch. A
+// single malformed line in an otherwise valid log is still tolerated/skipped.
 export function monthToDateUsd(
   now: Date = new Date(),
   logPath: string = LOG_PATH
@@ -50,31 +68,43 @@ export function monthToDateUsd(
   let raw: string;
   try {
     raw = fs.readFileSync(logPath, "utf8");
-  } catch {
-    return 0;
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return 0;
+    throw err;
   }
   const month = currentMonth(now);
   let total = 0;
+  let parsed = 0;
+  let malformed = 0;
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
       const entry = JSON.parse(trimmed) as Partial<CostEntry>;
+      parsed += 1;
       if (entry.month === month && typeof entry.usd === "number") {
         total += entry.usd;
       }
     } catch {
-      // skip malformed line
+      malformed += 1;
     }
+  }
+  if (parsed === 0 && malformed > 0) {
+    throw new Error("chat cost log is unparseable — refusing to trust total");
   }
   return total;
 }
 
+// Fail-closed: any inability to read/parse the log reads as "over cap".
 export function isOverCap(
   now: Date = new Date(),
   logPath: string = LOG_PATH
 ): boolean {
-  return monthToDateUsd(now, logPath) >= MONTHLY_CAP_USD;
+  try {
+    return monthToDateUsd(now, logPath) >= MONTHLY_CAP_USD;
+  } catch {
+    return true;
+  }
 }
 
 // Append one completed turn's tokens + cost. Best-effort: a logging failure
@@ -92,6 +122,9 @@ export function logTurn(
     usd: usdForTokens(usage),
   };
   try {
+    // Single-writer assumption: one server instance owns this append-only log,
+    // so an unlocked appendFileSync is atomic enough. If this ever runs on
+    // multiple instances sharing the file, add file locking here.
     fs.appendFileSync(logPath, JSON.stringify(entry) + "\n", "utf8");
     return true;
   } catch {
