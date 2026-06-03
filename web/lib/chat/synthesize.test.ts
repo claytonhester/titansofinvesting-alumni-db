@@ -77,4 +77,54 @@ describe("streamAnswer", () => {
     const userMsg = callArg.messages[callArg.messages.length - 1];
     expect(userMsg.content).toContain("none matched");
   });
+
+  it("renders the full verified claim set without truncating to four", async () => {
+    const claim = (claim_type: string, value: string) => ({
+      claim_type,
+      value,
+      source_url: "https://example.com/x",
+    });
+    await collect([
+      person({
+        claims: [
+          claim("current_title", "Partner"),
+          claim("current_employer", "Acme PE"),
+          claim("career_history", "Analyst at Bank (2010-2012)"),
+          claim("education", "MBA from Texas"),
+          claim("location", "Dallas, TX"),
+          claim("short_bio", "Focuses on growth equity."),
+        ],
+      }),
+    ]);
+    const callArg = streamFn.mock.calls.at(-1)![0];
+    const userMsg = callArg.messages[callArg.messages.length - 1];
+    // All six survive — the old code dropped everything past the first four.
+    expect(userMsg.content).toContain("short_bio: Focuses on growth equity.");
+    expect(userMsg.content).toContain("location: Dallas, TX");
+  });
+
+  it("orders claims current-role-first and excludes news mentions", async () => {
+    const claim = (claim_type: string, value: string) => ({
+      claim_type,
+      value,
+      source_url: "https://example.com/x",
+    });
+    await collect([
+      person({
+        claims: [
+          claim("news_mention", "2021 — Jane named to 30 under 30"),
+          claim("short_bio", "Bio text."),
+          claim("current_title", "Partner"),
+        ],
+      }),
+    ]);
+    const callArg = streamFn.mock.calls.at(-1)![0];
+    const content: string = callArg.messages[callArg.messages.length - 1]
+      .content;
+    expect(content).not.toContain("news_mention");
+    expect(content).not.toContain("30 under 30");
+    expect(content.indexOf("current_title")).toBeLessThan(
+      content.indexOf("short_bio")
+    );
+  });
 });
