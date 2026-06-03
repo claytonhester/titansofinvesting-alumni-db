@@ -10,11 +10,14 @@ The model is a reasoning layer over evidence, NEVER a source of truth.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 
 from anthropic import Anthropic
 
 from discovery import Source
+
+logger = logging.getLogger(__name__)
 
 # Haiku 4.5 — cheapest tier that can do disciplined extraction well.
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
@@ -243,5 +246,15 @@ def _parse_json(text: str) -> dict:
             try:
                 return json.loads(cleaned[start : end + 1])
             except json.JSONDecodeError:
+                logger.warning(
+                    "structuring: brace-substring JSON parse failed; returning {} "
+                    "(extraction lost for this record); head=%r",
+                    cleaned[:120],
+                )
                 return {}
+        logger.warning(
+            "structuring: no JSON object found in model output; returning {} "
+            "(extraction lost for this record); head=%r",
+            cleaned[:120],
+        )
         return {}

@@ -21,12 +21,15 @@ candidate, and we never auto-merge an uncertain identity.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 
 from anthropic import Anthropic
 
 from discovery import Source
 from enrichment_store import DECISION_ACCEPT, DECISION_REJECT, DECISION_REVIEW
+
+logger = logging.getLogger(__name__)
 
 # Sonnet 4.6 — the reasoning tier for disambiguation; a wrong merge is the
 # project's biggest liability, so we do not economise here with Haiku.
@@ -209,6 +212,11 @@ def _parse_scores(text: str) -> dict[str, tuple[float, str]]:
         if 0 <= start < end:
             data = _loads(cleaned[start : end + 1])
     if not isinstance(data, list):
+        logger.warning(
+            "identity: model reply was not a JSON array; returning {} "
+            "(all sources default to rejected for this person); head=%r",
+            cleaned[:120],
+        )
         return {}
 
     out: dict[str, tuple[float, str]] = {}

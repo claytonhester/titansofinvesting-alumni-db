@@ -23,9 +23,16 @@ const bodySchema = z.object({
 });
 
 function clientIp(req: Request): string {
+  // Defense-in-depth for the per-IP limiter (the monthly cap is the real
+  // backstop). A client can stuff arbitrary values into x-forwarded-for, but
+  // on the deploy target (Vercel) x-real-ip is injected by the platform edge
+  // and cannot be overridden by the caller — prefer it, fall back to the first
+  // forwarded token only when the platform header is absent (e.g. local dev).
+  const real = req.headers.get("x-real-ip");
+  if (real) return real.trim();
   const fwd = req.headers.get("x-forwarded-for");
   if (fwd) return fwd.split(",")[0].trim();
-  return req.headers.get("x-real-ip") ?? "unknown";
+  return "unknown";
 }
 
 function textResponse(message: string, rejected: boolean): Response {
@@ -89,6 +96,11 @@ export async function POST(req: Request): Promise<Response> {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      // The plan call's tokens are already spent before streaming begins. Track
+      // whether the combined usage was logged; if synthesis throws before its
+      // usage event, the finally block still records the incurred plan cost so
+      // the monthly kill-switch can't be undercounted.
+      let logged = false;
       try {
         for await (const event of streamAnswer(history, rows)) {
           if (event.type === "text") {
@@ -99,6 +111,7 @@ export async function POST(req: Request): Promise<Response> {
               output_tokens:
                 planUsage.output_tokens + event.usage.output_tokens,
             });
+            logged = true;
           }
         }
       } catch {
@@ -106,6 +119,7 @@ export async function POST(req: Request): Promise<Response> {
           encoder.encode("\n\n(Sorry — the answer was cut short. Please try again.)")
         );
       } finally {
+        if (!logged) logTurn(planUsage);
         controller.close();
       }
     },

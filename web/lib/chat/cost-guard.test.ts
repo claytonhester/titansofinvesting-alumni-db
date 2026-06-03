@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isOverCap,
   logTurn,
@@ -24,7 +24,7 @@ function tmpLog(): string {
 afterEach(() => {
   while (tmpFiles.length) {
     const p = tmpFiles.pop();
-    if (p && fs.existsSync(p)) fs.rmSync(p);
+    if (p && fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true });
   }
 });
 
@@ -87,6 +87,87 @@ describe("isOverCap", () => {
       "utf8"
     );
     expect(isOverCap(new Date("2026-06-10T00:00:00Z"), logPath)).toBe(true);
+  });
+
+  it("is false (zero spent) when the log is genuinely missing", () => {
+    expect(isOverCap(new Date("2026-06-10T00:00:00Z"), tmpLog())).toBe(false);
+  });
+
+  it("fails CLOSED when the log is a directory (read error)", () => {
+    const dir = path.join(
+      os.tmpdir(),
+      `chat_cost_dir_${Date.now()}_${Math.random().toString(36).slice(2)}`
+    );
+    fs.mkdirSync(dir);
+    tmpFiles.push(dir);
+    expect(isOverCap(new Date("2026-06-10T00:00:00Z"), dir)).toBe(true);
+  });
+
+  it("fails CLOSED when the log is wholly unparseable garbage", () => {
+    const logPath = tmpLog();
+    fs.writeFileSync(logPath, "%%not json%%\n\x00\x01garbage\n", "utf8");
+    expect(isOverCap(new Date("2026-06-10T00:00:00Z"), logPath)).toBe(true);
+  });
+});
+
+describe("monthToDateUsd fail-closed", () => {
+  it("throws on a wholly-unparseable non-empty log", () => {
+    const logPath = tmpLog();
+    fs.writeFileSync(logPath, "not json\nstill not json\n", "utf8");
+    expect(() =>
+      monthToDateUsd(new Date("2026-06-10T00:00:00Z"), logPath)
+    ).toThrow();
+  });
+
+  it("still tolerates a single malformed line among valid entries", () => {
+    const logPath = tmpLog();
+    fs.writeFileSync(
+      logPath,
+      [
+        JSON.stringify({ month: "2026-06", usd: 2 }),
+        "garbage line",
+        JSON.stringify({ month: "2026-06", usd: 1 }),
+      ].join("\n") + "\n",
+      "utf8"
+    );
+    expect(
+      monthToDateUsd(new Date("2026-06-10T00:00:00Z"), logPath)
+    ).toBeCloseTo(3, 10);
+  });
+});
+
+describe("price env overrides", () => {
+  const ENV_KEYS = ["HAIKU_USD_PER_MTOK_IN", "HAIKU_USD_PER_MTOK_OUT"] as const;
+  const saved: Record<string, string | undefined> = {};
+
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+    vi.resetModules();
+  });
+
+  it("uses env-provided prices when set", async () => {
+    for (const k of ENV_KEYS) saved[k] = process.env[k];
+    process.env.HAIKU_USD_PER_MTOK_IN = "2";
+    process.env.HAIKU_USD_PER_MTOK_OUT = "10";
+    vi.resetModules();
+    const fresh = await import("./cost-guard");
+    expect(
+      fresh.usdForTokens({ input_tokens: 1_000_000, output_tokens: 1_000_000 })
+    ).toBeCloseTo(12, 10);
+  });
+
+  it("falls back to defaults for a non-positive or non-numeric value", async () => {
+    for (const k of ENV_KEYS) saved[k] = process.env[k];
+    process.env.HAIKU_USD_PER_MTOK_IN = "0";
+    process.env.HAIKU_USD_PER_MTOK_OUT = "abc";
+    vi.resetModules();
+    const fresh = await import("./cost-guard");
+    expect(
+      fresh.usdForTokens({ input_tokens: 1_000_000, output_tokens: 1_000_000 })
+    ).toBeCloseTo(6, 10);
   });
 });
 

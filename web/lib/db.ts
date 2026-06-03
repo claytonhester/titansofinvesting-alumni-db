@@ -11,6 +11,7 @@ function db(): Database.Database {
   if (_db) return _db;
   _db = new Database(DB_PATH, { readonly: true, fileMustExist: true });
   _db.pragma("query_only = true");
+  _db.pragma("busy_timeout = 5000");
   return _db;
 }
 

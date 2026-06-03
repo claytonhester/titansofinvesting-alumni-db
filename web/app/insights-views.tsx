@@ -198,7 +198,7 @@ export default function InsightsViews(props: InsightsViewsProps) {
 
             <div className="panel col-6">
               <div className="insight-synthesis-head">
-                <h3>What they're doing now</h3>
+                <h3>What they&rsquo;re doing now</h3>
                 {props.isSample && <Pill />}
               </div>
               <FirmList firms={titleFirms} />

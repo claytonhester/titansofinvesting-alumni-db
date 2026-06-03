@@ -9,7 +9,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["lib/**/*.test.ts"],
+    include: ["lib/**/*.test.ts", "app/**/*.test.ts"],
     coverage: {
       include: ["lib/chat/**/*.ts"],
       exclude: ["lib/chat/**/*.test.ts", "lib/chat/anthropic.ts"],
