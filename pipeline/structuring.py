@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from anthropic import Anthropic
 
 from discovery import Source
+from enrichment_store import ClaimRow
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +186,7 @@ def _facts_from_profile(profile: dict) -> list[tuple[str, float]]:
     return facts
 
 
-def profile_from_claims(claims: list) -> dict:
+def profile_from_claims(claims: list[ClaimRow]) -> dict:
     """Build the minimal profile-shaped dict synthesize_bio reads, from a flat
     ClaimRow list. Lets the bio be composed from ALL résumé sources (PDL included),
     not just Firecrawl's extraction — so a PDL-matched person with no scraped pages
