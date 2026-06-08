@@ -1,12 +1,49 @@
 """Tests for normalize.smart_title and normalize.digest_claims."""
 import pytest
 from enrichment_store import ClaimRow
-from normalize import smart_title, digest_claims, is_junk_value
+from normalize import smart_title, digest_claims, is_junk_value, clean_link_title
 
 
 def _claim(claim_type: str, value: str, confidence: float = 0.8, method: str = "haiku") -> ClaimRow:
     return ClaimRow(claim_type=claim_type, value=value, source_url="https://example.com",
                     quote="verbatim quote", confidence=confidence, extraction_method=method)
+
+
+# ── clean_link_title (public-link title tidying) ─────────────────────────────
+
+class TestCleanLinkTitle:
+    def test_raw_pdf_filename_becomes_readable(self):
+        assert clean_link_title(
+            "Trusted_Insight_2018_-_Top_30_Public_Pension_Institutional_Investors.pdf"
+        ) == "Trusted Insight 2018 - Top 30 Public Pension Institutional Investors"
+
+    def test_glued_doubled_scrape_collapses(self):
+        # "Paragon IntelParagon Intel" -> de-glue -> collapse the duplicate phrase
+        assert clean_link_title("CEO - Paragon IntelParagon Intel") == "CEO - Paragon Intel"
+
+    def test_whole_title_doubled_collapses(self):
+        assert clean_link_title("Paragon Intel Paragon Intel") == "Paragon Intel"
+
+    def test_does_not_split_legit_camelcase(self):
+        # No duplicate results, so the camelCase de-glue must be discarded.
+        assert clean_link_title("McKinsey & Company") == "McKinsey & Company"
+        assert clean_link_title("Will Carpenter | LinkedIn") == "Will Carpenter | LinkedIn"
+
+    def test_single_word_repeat_preserved(self):
+        assert clean_link_title("Duran Duran") == "Duran Duran"
+
+    def test_clean_title_passes_through(self):
+        t = "Teacher Retirement System of Texas On Being 'A Top-Performing Institutional Investor'"
+        assert clean_link_title(t) == t
+
+    def test_empty_cleanup_falls_back_to_original(self):
+        assert clean_link_title("   ") == ""
+
+    def test_public_links_cleaned_in_digest(self):
+        rows = digest_claims([
+            _claim("public_links", "Report_2018_Final.pdf"),
+        ])
+        assert rows[0].value == "Report 2018 Final"
 
 
 # ── smart_title ──────────────────────────────────────────────────────────────

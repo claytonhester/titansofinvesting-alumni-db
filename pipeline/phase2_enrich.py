@@ -39,6 +39,8 @@ from discovery import DiscoveryResult, NewsDiscoveryResult, Source, _domain, dis
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
 from normalize import digest_claims
 from pdl_enrich import enrich_pdl
+from pdl_verify import verify_pdl_claims
+from reconcile import reconcile_claims
 from db import connect, init_schema
 from enrichment_store import (
     DECISION_ACCEPT,
@@ -66,6 +68,7 @@ from structuring import (
     BIO_SYNTHESIS_METHOD,
     HAIKU_MODEL,
     StructuringResult,
+    profile_from_claims,
     structure_profile,
     synthesize_bio,
 )
@@ -209,7 +212,18 @@ def enrich_person(
     """Run the full pipeline for one person and persist every stage. Records
     batch_status per phase so a crash mid-batch resumes cleanly. Returns the
     person's usage so the caller can fold it into the run-level cost log."""
-    disc = discover(firecrawl, person.full_name, person.company, person.city)
+    # Firecrawl is the deepest career source but it is billed and can run dry.
+    # Treat a 0-credit state as a graceful skip, NOT a fatal abort: PDL +
+    # Perplexity remain a working spine, so the batch keeps producing profiles
+    # (just without scraped career pages) instead of dying on person one.
+    try:
+        disc = discover(firecrawl, person.full_name, person.company, person.city)
+    except PaymentRequiredError:
+        print("  Firecrawl: no credits — career discovery skipped "
+              "(using PDL + Perplexity only)")
+        disc = DiscoveryResult(
+            full_name=person.full_name, sources=(), queries=(), credits_spent=0
+        )
     replace_sources(conn, person.id, _source_rows(disc))
     anchors = _anchors(person)
 
@@ -228,21 +242,10 @@ def enrich_person(
     struct = structure_profile(anthropic, person.full_name, trusted)
     claim_rows = _claim_rows(struct)
 
-    # When no source handed us a ready-made narrative, compose a short_bio from
-    # the facts we DID verify — so "enough is known" produces a description even
-    # when no page wrote one. Tagged as synthesis, never a direct quote.
-    bio = synthesize_bio(anthropic, person.full_name, struct.profile)
-    if bio is not None:
-        claim_rows.append(
-            ClaimRow(
-                claim_type="short_bio",
-                value=bio.value,
-                source_url="",
-                quote="",
-                confidence=bio.confidence,
-                extraction_method=BIO_SYNTHESIS_METHOD,
-            )
-        )
+    # What Claude actually verified as the current role — used to anchor the PDL
+    # identity gate and to build sharper news/mention queries below.
+    _verified_employer = (struct.profile.get("current_employer") or {}).get("value", "")
+    _verified_title = (struct.profile.get("current_title") or {}).get("value", "")
 
     # PDL deepens the verified résumé (canonical claim_types, identity-gated on
     # likelihood). Skips cleanly when its key is unset and never raises, so a
@@ -259,26 +262,55 @@ def enrich_person(
         if pdl_key
         else None
     )
-    if pdl is not None:
-        claim_rows.extend(pdl.claim_rows)
+    # Identity-gate PDL's career/education extras through Haiku before trusting
+    # them. PDL already cleared its likelihood gate, but a confident match can
+    # still splice in a namesake's stray entry; this holds the deeper résumé facts
+    # to the same bar as our public mentions. Current role/location/links pass
+    # through. Conservative — drops only clear inconsistencies, never raises.
+    pdl_pv_in = pdl_pv_out = 0
+    pdl_dropped = 0
+    if pdl is not None and pdl.claim_rows:
+        n_before = len(pdl.claim_rows)
+        kept_pdl, pdl_pv_in, pdl_pv_out = verify_pdl_claims(
+            anthropic, person.full_name,
+            _verified_employer or person.company, person.city,
+            list(pdl.claim_rows),
+        )
+        pdl_dropped = n_before - len(kept_pdl)
+        claim_rows.extend(kept_pdl)
+
+    # Compose a short_bio from the verified facts when no source handed us a
+    # ready-made narrative. Built from the FULL résumé set (Firecrawl + PDL), so a
+    # PDL-matched person with zero scraped pages still gets a description. Composes
+    # only from structured facts (never new knowledge); tagged synthesis, not a quote.
+    bio = synthesize_bio(anthropic, person.full_name, profile_from_claims(claim_rows))
+    if bio is not None:
+        claim_rows.append(
+            ClaimRow(
+                claim_type="short_bio",
+                value=bio.value,
+                source_url="",
+                quote="",
+                confidence=bio.confidence,
+                extraction_method=BIO_SYNTHESIS_METHOD,
+            )
+        )
 
     # Firecrawl + Claude news pass: search press/finance domains, scrape the
-    # top hits, and use Haiku to verify identity and extract the mention.
-    #
-    # Use the verified employer + title from struct.profile so the news queries
-    # are built from what Claude actually found ("Kayne Anderson Capital Advisors"
-    # + "Managing Director") rather than the raw directory string
-    # ("Entrepreneur, Kayne Anderson, Houston..."). More precise queries = more
-    # relevant articles found and fewer wasted scrape credits.
-    _verified_employer = (struct.profile.get("current_employer") or {}).get("value", "")
-    _verified_title = (struct.profile.get("current_title") or {}).get("value", "")
-    news_disc = discover_news(
-        firecrawl,
-        person.full_name,
-        person.company,
-        verified_employer=_verified_employer,
-        verified_title=_verified_title,
-    )
+    # top hits, and use Haiku to verify identity and extract the mention. Queries
+    # use the verified employer/title (set above) so they reflect what Claude
+    # found, not the raw directory string — more relevant hits, fewer wasted
+    # scrape credits.
+    try:
+        news_disc = discover_news(
+            firecrawl,
+            person.full_name,
+            person.company,
+            verified_employer=_verified_employer,
+            verified_title=_verified_title,
+        )
+    except PaymentRequiredError:
+        news_disc = NewsDiscoveryResult(sources=(), credits_spent=0)
     fc_news = extract_news_mentions(anthropic, person.full_name, _verified_employer or person.company, news_disc)
     if fc_news.claim_rows:
         claim_rows.extend(fc_news.claim_rows)
@@ -296,10 +328,18 @@ def enrich_person(
     if mentions.claim_rows:
         claim_rows.extend(mentions.claim_rows)
 
+    # LLM reconciliation: the sources disagree on phrasing/freshness, so before
+    # the deterministic digest, let Haiku merge same-real-world-fact résumé claims
+    # (PDL's "Analyst, TRS" + Firecrawl's "Investment Analyst at Teacher
+    # Retirement System (2015–2018)" → one canonical entry) and pick a single
+    # current employer/title. Mentions pass through untouched. Never invents,
+    # never drops, never raises — so digest still runs on whatever it returns.
+    reconciled, rec_in, rec_out = reconcile_claims(anthropic, person.full_name, claim_rows)
+
     # Normalize casing and deduplicate before persisting — ensures "senior
     # investment manager" and "Senior Investment Manager" from two sources
     # collapse to one properly-cased entry.
-    clean_rows = digest_claims(claim_rows)
+    clean_rows = digest_claims(reconciled)
     replace_claims(conn, person.id, clean_rows)
     mark_phase(conn, person.id, PHASE_STRUCTURING, "done")
 
@@ -307,7 +347,7 @@ def enrich_person(
     n_review = sum(1 for v in verdicts if v.decision == DECISION_REVIEW)
     n_pre = len(pre.decided)
     pdl_matched = bool(pdl and pdl.matched)
-    n_pdl_claims = len(pdl.claim_rows) if pdl else 0
+    n_pdl_claims = (len(pdl.claim_rows) - pdl_dropped) if pdl else 0
     n_mentions = len(mentions.claim_rows)
     n_fc_news = len(fc_news.claim_rows)
     print(
@@ -315,6 +355,7 @@ def enrich_person(
         f"{n_accept} accepted ({n_pre} by pre-filter), {n_review} to review; "
         f"{len(claim_rows)} claims{' (+synth bio)' if bio else ''}"
         f"{f' (+{n_pdl_claims} PDL)' if n_pdl_claims else ''}"
+        f"{f' (-{pdl_dropped} PDL gated)' if pdl_dropped else ''}"
         f"{f' (+{n_fc_news} press)' if n_fc_news else ''}"
         f"{f' (+{n_mentions} verified mentions)' if n_mentions else ''}; "
         f"{len(pre.ambiguous)} sent to Sonnet; "
@@ -326,11 +367,15 @@ def enrich_person(
             struct.input_tokens
             + (bio.input_tokens if bio else 0)
             + fc_news.input_tokens
+            + rec_in
+            + pdl_pv_in
         ),
         haiku_out=(
             struct.output_tokens
             + (bio.output_tokens if bio else 0)
             + fc_news.output_tokens
+            + rec_out
+            + pdl_pv_out
         ),
         sonnet_in=identity.input_tokens,
         sonnet_out=identity.output_tokens,

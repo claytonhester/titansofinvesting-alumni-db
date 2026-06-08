@@ -28,19 +28,25 @@ Every target is an alumnus of a Texas university finance/investing program \
 (Titans of Investing). For each you get their name, the ONE employer on record \
 (which may be outdated, or may actually be the school they attended), and a city.
 
-Judge each result (title + snippet + source domain):
-- "yes" — it fits a finance/investing/business professional AND corroborates the \
-target on employer, role, location, education, or similar. Authoritative records \
-(regulatory filings like FINRA BrokerCheck, company leadership/bio pages, \
-professional profiles) about a finance person with a matching detail are "yes".
-- "no" — clearly a DIFFERENT person: different profession (therapist, athlete, \
-clergy, academic in an unrelated field), a historical figure, or an unrelated \
-field/location with no finance tie.
+A result counts ONLY if the page is substantively ABOUT this person — not merely a \
+page that happens to name them. Judge each result (title + snippet + source domain):
+- "yes" — the page is about the TARGET as an individual AND fits a \
+finance/investing/business professional: their bio or profile, an interview or \
+Q&A with them, a named leadership/role listing for them, an article focused on \
+them or quoting them, or an authoritative record about them personally (e.g. a \
+FINRA BrokerCheck record for this person).
+- "no" — ANY of: (a) the page is primarily about their COMPANY/employer, not them \
+— funding rounds, product launches, "top company" awards, market news — even if \
+they are the CEO and named in passing; (b) a public-records or people-search \
+DATABASE lookup — salary explorers, government salary directories, data brokers — \
+even if the name matches exactly; (c) a clearly DIFFERENT person (different \
+profession, historical figure, unrelated field/location); (d) only a common word \
+overlaps ("university", "energy", "texas") with no person-level fit.
 - "unsure" — genuinely ambiguous; not enough signal to decide.
 
-Be strict: a shared name alone is NOT a match. If the only overlap is a common \
-word ("university", "energy", "identity", "texas") with no real person-level fit, \
-lean "no" or "unsure".
+Be strict: a shared name alone is NOT a match, and the person being merely \
+mentioned on a page about their company is NOT a match. When the page is about the \
+firm rather than the human, choose "no".
 
 Return ONLY a JSON array, one object per result, in the SAME order:
 [{"index": <int>, "verdict": "yes|no|unsure", "reason": "<short>"}]"""

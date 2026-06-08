@@ -35,7 +35,12 @@ _AGGREGATOR_DOMAINS = frozenset({
     "beenverified.com", "thatsthem.com", "peoplefinders.com", "whitepages.com",
     "fastpeoplesearch.com", "mylife.com", "radaris.com", "nuwber.com",
     "clustrmaps.com", "leadiq.com", "apollo.io", "lusha.com",
-    "marketscreener.com", "bbb.org",
+    "marketscreener.com", "bbb.org", "me.sh", "usphonebook.com",
+    "truepeoplesearch.com", "peekyou.com",
+    # Public-records / salary-database lookups: a name match here is a directory
+    # entry, not a page about the person.
+    "govsalaries.com", "salaries.texastribune.org", "openpayrolls.com",
+    "transparentcalifornia.com",
 })
 
 # Employer tokens too generic to prove a co-mention on their own.

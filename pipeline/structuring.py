@@ -185,6 +185,23 @@ def _facts_from_profile(profile: dict) -> list[tuple[str, float]]:
     return facts
 
 
+def profile_from_claims(claims: list) -> dict:
+    """Build the minimal profile-shaped dict synthesize_bio reads, from a flat
+    ClaimRow list. Lets the bio be composed from ALL résumé sources (PDL included),
+    not just Firecrawl's extraction — so a PDL-matched person with no scraped pages
+    still gets a narrative. Public links / mentions are ignored (not bio facts)."""
+    singles = {"current_title", "current_employer", "location", "short_bio"}
+    lists = {"career_history", "education"}
+    prof: dict = {}
+    for c in claims:
+        node = {"value": c.value, "confidence": c.confidence}
+        if c.claim_type in singles:
+            prof.setdefault(c.claim_type, node)  # first seen wins
+        elif c.claim_type in lists:
+            prof.setdefault(c.claim_type, []).append(node)
+    return prof
+
+
 def synthesize_bio(
     client: Anthropic,
     full_name: str,

@@ -12,6 +12,8 @@ regardless of which sources contributed.
 """
 from __future__ import annotations
 
+import re
+
 from enrichment_store import ClaimRow
 
 # Words that stay lowercase unless they are the first word in the string.
@@ -117,10 +119,67 @@ def smart_title(value: str) -> str:
     return " ".join(result)
 
 
+_FILENAME_RE = re.compile(r"\.(pdf|docx?|pptx?|xlsx?|html?|aspx|php)$", re.IGNORECASE)
+_LOWER_UPPER_RE = re.compile(r"([a-z])([A-Z])")
+
+
+def _collapse_adjacent_dups(tokens: list[str]) -> list[str]:
+    """Remove an adjacent repeated phrase of 2+ tokens ("Paragon Intel Paragon
+    Intel" -> "Paragon Intel"). Single-token repeats are left alone so legitimate
+    cases ("Duran Duran", "New York, New York") survive."""
+    out = list(tokens)
+    changed = True
+    while changed:
+        changed = False
+        n = len(out)
+        for k in range(n // 2, 1, -1):  # k >= 2: phrase-level only
+            for i in range(0, n - 2 * k + 1):
+                if [t.lower() for t in out[i : i + k]] == [t.lower() for t in out[i + k : i + 2 * k]]:
+                    out = out[: i + k] + out[i + 2 * k :]
+                    changed = True
+                    break
+            if changed:
+                break
+    return out
+
+
+def clean_link_title(value: str) -> str:
+    """Tidy a scraped public-link title for display:
+    - a raw filename ("Trusted_Insight_2018_-_Top_30.pdf") becomes readable text,
+    - a glued/doubled scrape ("Paragon IntelParagon Intel") collapses to one,
+    - internal whitespace is normalized.
+    Conservative: any cleanup that would empty the title is discarded, and a
+    word-gluing split is only kept when it actually removes a duplicate (so
+    "McKinsey"/"LinkedIn"/"PayPal" are never split)."""
+    if not value:
+        return value
+    text = value.strip()
+
+    # 1. Filename -> words: drop the extension, underscores become spaces.
+    if _FILENAME_RE.search(text) or ("_" in text and " " not in text):
+        text = _FILENAME_RE.sub("", text).replace("_", " ")
+
+    # 2. Collapse a phrase-level adjacent duplicate. Try de-gluing camelCase
+    #    joins first, but only adopt the split if it lets a duplicate collapse.
+    base_collapsed = " ".join(_collapse_adjacent_dups(text.split()))
+    deglued = _LOWER_UPPER_RE.sub(r"\1 \2", text)
+    deglued_collapsed = " ".join(_collapse_adjacent_dups(deglued.split()))
+    if deglued_collapsed != deglued:  # the split produced a real collapse
+        text = deglued_collapsed
+    else:
+        text = base_collapsed
+
+    # 3. Normalize whitespace; never return an empty title.
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or value.strip()
+
+
 def _normalize_value(claim_type: str, value: str) -> str:
-    """Apply smart_title to claim types that display as professional titles."""
+    """Title-case professional types; tidy scraped titles on public links."""
     if claim_type in _TITLE_CASE_TYPES:
         return smart_title(value)
+    if claim_type == "public_links":
+        return clean_link_title(value)
     return value
 
 

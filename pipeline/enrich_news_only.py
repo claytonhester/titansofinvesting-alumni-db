@@ -29,6 +29,8 @@ from mention_discovery import discover_mentions
 from news_enrich import extract_news_mentions
 from normalize import digest_claims
 from pdl_enrich import enrich_pdl
+from pdl_verify import verify_pdl_claims
+from reconcile import reconcile_claims
 from cost_log import PDL_USD_PER_MATCH
 
 
@@ -88,9 +90,16 @@ def run(name: str | None) -> int:
                         cost_usd_per_match=PDL_USD_PER_MATCH,
                     )
                     if pdl and pdl.claim_rows:
-                        new_claims.extend(pdl.claim_rows)
-                        print(f"  PDL: {len(pdl.claim_rows)} claims "
-                              f"(matched={pdl.matched}, ${pdl.cost_usd:.4f})")
+                        kept_pdl, _, _ = verify_pdl_claims(
+                            anthropic, full_name,
+                            p.get("verified_employer") or company, city,
+                            list(pdl.claim_rows),
+                        )
+                        new_claims.extend(kept_pdl)
+                        gated = len(pdl.claim_rows) - len(kept_pdl)
+                        print(f"  PDL: {len(kept_pdl)} claims "
+                              f"(matched={pdl.matched}, ${pdl.cost_usd:.4f}"
+                              f"{f', -{gated} gated' if gated else ''})")
                     else:
                         print("  PDL: no match")
                 else:
@@ -158,7 +167,10 @@ def run(name: str | None) -> int:
                     )
                     for r in existing_rows
                 ]
-                merged = digest_claims(existing + new_claims)
+                # Reconcile the full set (existing + new) so multi-source résumé
+                # facts collapse semantically before the deterministic digest.
+                reconciled, _, _ = reconcile_claims(anthropic, full_name, existing + new_claims)
+                merged = digest_claims(reconciled)
                 replace_claims(conn, pid, merged)
                 conn.commit()
                 delta = len(merged) - len(existing)

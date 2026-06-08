@@ -106,13 +106,32 @@ Then `cd web && npm run sync-db` to push the new data to the site.
 
 ### How data is cleaned (automatic — no manual step)
 
-Every claim, from every source, passes through one gate (`normalize.digest_claims`)
-right before it's written, which:
-- **Title-cases** professional values ("kbre" → "KBRE", "texas a&m" → "Texas A&M").
-- **Drops junk** values (a boolean/placeholder like "True" or "N/A" never gets stored).
-- **De-duplicates** exact case-insensitive repeats from overlapping sources.
+Every claim, from every source, passes through **two** gates right before it's
+written:
 
-The web app then does a second cleaning pass at render time (`web/lib/`): it
+1. **LLM reconciliation** (`reconcile.py`) — one Haiku call/person that merges
+   *semantically* duplicate résumé facts the dumb deduper can't: PDL's "Analyst,
+   TRS" + Firecrawl's "Investment Analyst at Teacher Retirement System
+   (2015–2018)" collapse into one canonical entry (title from one source, dates
+   from another), and a single current employer/title is chosen from competing
+   sources. Three hard guarantees: it **never invents** a fact (values are
+   constrained to what sources said), **never drops** a distinct company/school (a
+   token-overlap guard splits any wrong merge back apart), and **never raises**
+   (falls back to the raw set). Public mentions/links pass through untouched.
+2. **Deterministic digest** (`normalize.digest_claims`) — then:
+   - **Title-cases** professional values ("kbre" → "KBRE", "texas a&m" → "Texas A&M").
+   - **Drops junk** values (a boolean/placeholder like "True" or "N/A" never gets stored).
+   - **De-duplicates** exact case-insensitive repeats from overlapping sources.
+
+Both run inline on every enrichment — no manual step. To apply reconciliation to
+people enriched *before* it existed (without re-charging PDL/Perplexity):
+
+```bash
+python reconcile_existing.py --dry-run    # preview before/after, write nothing
+python reconcile_existing.py              # apply, then `cd web && npm run sync-db`
+```
+
+The web app then does a third cleaning pass at render time (`web/lib/`): it
 re-title-cases everything, **merges duplicate jobs** (a dated role + its dateless
 prose twin collapse into one; multiple roles at one employer stack under that
 company), **groups education** (one card per school, degrees listed once), and
@@ -127,10 +146,17 @@ GNews/GDELT badly in testing (see `news_experiment.py`):
 
 1. **Perplexity Search** for the person (name + employer) — finds bios, firm
    leadership pages, FINRA records, profiles, press.
-2. **Drop aggregator domains** — people-search / data-broker junk (`news_score`).
-3. **Claude Haiku identity check** (`news_verify`) — confirms each result is
-   actually *this* person, not a namesake (kills the "Confederate general named
-   Thomas Green" problem string-matching can't).
+2. **Drop aggregator domains** — people-search / data-broker / salary-database
+   junk (`news_score`).
+3. **Claude Haiku identity check, strict** (`news_verify`) — a result counts ONLY
+   if the page is substantively *about the person* (their bio, interview, named
+   role, quote), not about their *company* (funding rounds, awards, firm pages)
+   and not a public-record lookup. Kills both namesakes and company-PR noise.
+
+PDL's deeper résumé extras get the same treatment: `pdl_verify` runs PDL's added
+career/education through a Haiku identity gate before trusting them, dropping
+clear namesake splices and junk (it caught "Horizon Air" mis-stored as a school)
+while keeping plausible entries. Current role / location / LinkedIn pass through.
 
 Survivors are stored as `public_links` claims → they render in the web
 "Mentions & appearances" section, and like all name-search results stay OUT of
@@ -264,8 +290,12 @@ Then commit `web/data/titans.db` and redeploy if you're on Vercel. If the site l
 
 ## Troubleshooting
 
-**"FIRECRAWL CREDITS EXHAUSTED"**
-Top up at [firecrawl.dev](https://firecrawl.dev). Already-processed people are saved. Re-run the same command to continue.
+**Firecrawl out of credits**
+No longer fatal. A 0-credit state now **skips Firecrawl gracefully** per person
+("Firecrawl: no credits — career discovery skipped (using PDL + Perplexity only)")
+and the batch keeps producing profiles from PDL + Perplexity. Top up at
+[firecrawl.dev](https://firecrawl.dev) to restore scraped career pages; re-running
+a person re-adds Firecrawl data and reconciles it in.
 
 **"Nothing to enrich (all targets done or none matched)"**
 All people are already enriched. Use `--name` to re-enrich a specific person, or check batch_status:
