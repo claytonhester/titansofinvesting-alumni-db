@@ -34,9 +34,12 @@ from firecrawl import Firecrawl
 from config import DB_PATH, require_key
 from cost_log import PDL_USD_PER_MATCH, append_entry, build_entry, remaining_credits
 from gnews_enrich import fetch_news
+from news_enrich import NewsEnrichResult, extract_news_mentions
+from discovery import DiscoveryResult, NewsDiscoveryResult, Source, _domain, discover, discover_news
+from firecrawl.v2.utils.error_handler import PaymentRequiredError
+from normalize import digest_claims
 from pdl_enrich import enrich_pdl
 from db import connect, init_schema
-from discovery import DiscoveryResult, Source, _domain, discover
 from enrichment_store import (
     DECISION_ACCEPT,
     DECISION_REVIEW,
@@ -80,6 +83,8 @@ class _PersonUsage:
     pdl_matches: int
     pdl_usd: float
     gnews_requests: int
+    fc_news_credits: int       # Firecrawl credits spent on the news-specific pass
+    fc_news_articles: int      # confirmed news mentions found via Firecrawl+Claude
 
 
 @dataclass(frozen=True)
@@ -263,7 +268,34 @@ def enrich_person(
     if news is not None:
         claim_rows.extend(news.claim_rows)
 
-    replace_claims(conn, person.id, claim_rows)
+    # Firecrawl + Claude news pass: search press/finance domains, scrape the
+    # top hits, and use Haiku to verify identity and extract the mention.
+    # Runs on every person regardless of GNews key — the two sources are
+    # complementary (GNews = broad aggregator; this = deep press scrape).
+    #
+    # Use the verified employer + title from struct.profile so the news queries
+    # are built from what Claude actually found ("Kayne Anderson Capital Advisors"
+    # + "Managing Director") rather than the raw directory string
+    # ("Entrepreneur, Kayne Anderson, Houston..."). More precise queries = more
+    # relevant articles found and fewer wasted scrape credits.
+    _verified_employer = (struct.profile.get("current_employer") or {}).get("value", "")
+    _verified_title = (struct.profile.get("current_title") or {}).get("value", "")
+    news_disc = discover_news(
+        firecrawl,
+        person.full_name,
+        person.company,
+        verified_employer=_verified_employer,
+        verified_title=_verified_title,
+    )
+    fc_news = extract_news_mentions(anthropic, person.full_name, _verified_employer or person.company, news_disc)
+    if fc_news.claim_rows:
+        claim_rows.extend(fc_news.claim_rows)
+
+    # Normalize casing and deduplicate before persisting — ensures "senior
+    # investment manager" and "Senior Investment Manager" from two sources
+    # collapse to one properly-cased entry.
+    clean_rows = digest_claims(claim_rows)
+    replace_claims(conn, person.id, clean_rows)
     mark_phase(conn, person.id, PHASE_STRUCTURING, "done")
 
     n_accept = sum(1 for v in verdicts if v.decision == DECISION_ACCEPT)
@@ -271,24 +303,37 @@ def enrich_person(
     n_pre = len(pre.decided)
     pdl_matched = bool(pdl and pdl.matched)
     n_pdl_claims = len(pdl.claim_rows) if pdl else 0
-    n_news = len(news.claim_rows) if news else 0
+    n_gnews = len(news.claim_rows) if news else 0
+    n_fc_news = len(fc_news.claim_rows)
     print(
         f"  {person.full_name}: {len(disc.sources)} sources -> "
         f"{n_accept} accepted ({n_pre} by pre-filter), {n_review} to review; "
         f"{len(claim_rows)} claims{' (+synth bio)' if bio else ''}"
         f"{f' (+{n_pdl_claims} PDL)' if n_pdl_claims else ''}"
-        f"{f' (+{n_news} news)' if n_news else ''}; "
-        f"{len(pre.ambiguous)} sent to Sonnet; {disc.credits_spent} credits"
+        f"{f' (+{n_gnews} GNews)' if n_gnews else ''}"
+        f"{f' (+{n_fc_news} press)' if n_fc_news else ''}; "
+        f"{len(pre.ambiguous)} sent to Sonnet; "
+        f"{disc.credits_spent + news_disc.credits_spent} credits total"
     )
     return _PersonUsage(
         credits=disc.credits_spent,
-        haiku_in=struct.input_tokens + (bio.input_tokens if bio else 0),
-        haiku_out=struct.output_tokens + (bio.output_tokens if bio else 0),
+        haiku_in=(
+            struct.input_tokens
+            + (bio.input_tokens if bio else 0)
+            + fc_news.input_tokens
+        ),
+        haiku_out=(
+            struct.output_tokens
+            + (bio.output_tokens if bio else 0)
+            + fc_news.output_tokens
+        ),
         sonnet_in=identity.input_tokens,
         sonnet_out=identity.output_tokens,
         pdl_matches=1 if pdl_matched else 0,
         pdl_usd=pdl.cost_usd if pdl else 0.0,
         gnews_requests=news.request_count if news else 0,
+        fc_news_credits=news_disc.credits_spent,
+        fc_news_articles=n_fc_news,
     )
 
 
@@ -315,6 +360,7 @@ def run(limit: int, name: str | None) -> int:
         est_credits = 0
         haiku_in = haiku_out = sonnet_in = sonnet_out = 0
         pdl_matches = gnews_requests = 0
+        fc_news_credits = fc_news_articles = 0
         processed = 0
 
         with httpx.Client(timeout=30.0) as http:
@@ -325,14 +371,26 @@ def run(limit: int, name: str | None) -> int:
                         conn, firecrawl, anthropic, person, http, pdl_key, gnews_key
                     )
                     conn.commit()  # persist each person before moving on (resumable)
-                    est_credits += usage.credits
+                    est_credits += usage.credits + usage.fc_news_credits
                     haiku_in += usage.haiku_in
                     haiku_out += usage.haiku_out
                     sonnet_in += usage.sonnet_in
                     sonnet_out += usage.sonnet_out
                     pdl_matches += usage.pdl_matches
                     gnews_requests += usage.gnews_requests
+                    fc_news_credits += usage.fc_news_credits
+                    fc_news_articles += usage.fc_news_articles
                     processed += 1
+                except PaymentRequiredError:
+                    # No Firecrawl credits — abort the entire run immediately.
+                    # Continuing would just re-raise for every remaining person.
+                    print(
+                        "\n\nFIRECRAWL CREDITS EXHAUSTED — run aborted.\n"
+                        "Top up your credits at https://firecrawl.dev then re-run.\n"
+                        "Already-processed people are saved and will be skipped on re-run.",
+                        file=sys.stderr,
+                    )
+                    break
                 except Exception as exc:  # noqa: BLE001 - record and continue the batch
                     conn.rollback()
                     mark_phase(
@@ -363,6 +421,12 @@ def run(limit: int, name: str | None) -> int:
             f"\nRun cost ({src}): ${entry.total_usd:.4f} for {processed} people "
             f"(${entry.total_usd / processed:.4f}/person) -> data/cost_log.jsonl"
         )
+        if fc_news_articles:
+            print(
+                f"Press news pass: {fc_news_articles} verified articles found "
+                f"across {processed} people "
+                f"({fc_news_credits} Firecrawl credits)"
+            )
     return 0
 
 

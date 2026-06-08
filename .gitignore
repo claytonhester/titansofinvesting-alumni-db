@@ -14,6 +14,7 @@ pipeline/data/*.db
 pipeline/data/*.db.bak
 pipeline/data/*.db-journal
 pipeline/data/*.db-wal
+pipeline/data/*.db-shm
 pipeline/data/cache/
 
 # Runtime spend logs (append-only, regenerated at runtime)

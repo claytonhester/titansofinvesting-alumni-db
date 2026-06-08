@@ -202,6 +202,35 @@ def replace_claims(
     return len(rows)
 
 
+def append_claims(
+    conn: sqlite3.Connection, person_id: int, claims: Sequence[ClaimRow]
+) -> int:
+    """Append new claims without touching existing ones. Used when layering
+    optional enrichment sources (PDL, GNews, press news) onto an already-
+    structured profile — safer than replace_claims when the caller only has
+    the new rows, not the full claim set."""
+    rows = [
+        {
+            "person_id": person_id,
+            "claim_type": c.claim_type,
+            "value": c.value,
+            "source_url": c.source_url,
+            "quote": c.quote,
+            "confidence": c.confidence,
+            "extraction_method": c.extraction_method,
+        }
+        for c in claims
+    ]
+    conn.executemany(
+        "INSERT INTO claims "
+        "(person_id, claim_type, value, source_url, quote, confidence, extraction_method) "
+        "VALUES (:person_id, :claim_type, :value, :source_url, :quote, :confidence, "
+        ":extraction_method)",
+        rows,
+    )
+    return len(rows)
+
+
 def mark_phase(
     conn: sqlite3.Connection,
     person_id: int,

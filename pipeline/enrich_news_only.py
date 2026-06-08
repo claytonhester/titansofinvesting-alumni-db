@@ -1,0 +1,177 @@
+"""Layer PDL + GNews + Firecrawl press-news onto already-enriched people.
+
+Reads career data from the DB, runs only the three optional sources, and
+APPENDS the new claims without touching existing career/education/bio rows.
+Use this to backfill news and deeper career data on people already enriched
+without re-running the expensive Firecrawl discovery step.
+
+    python enrich_news_only.py                   # all 'done' people
+    python enrich_news_only.py --name "Jason Kaspar"
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+
+import httpx
+from anthropic import Anthropic
+from firecrawl import Firecrawl
+
+from config import DB_PATH, require_key
+from db import connect
+from discovery import discover_news
+from enrichment_store import ClaimRow, replace_claims
+from firecrawl.v2.utils.error_handler import PaymentRequiredError
+from gnews_enrich import fetch_news
+from news_enrich import extract_news_mentions
+from normalize import digest_claims
+from pdl_enrich import enrich_pdl
+from cost_log import PDL_USD_PER_MATCH
+
+
+def _load_done_people(conn, name: str | None) -> list[dict]:
+    """Load enriched people plus their verified employer/title from claims so
+    the news pass uses profile-aware queries instead of the raw directory string."""
+    base_sql = """
+        SELECT p.id, p.full_name, p.initial_company AS company, p.city,
+               MAX(CASE WHEN c.claim_type='current_employer' THEN c.value END) AS verified_employer,
+               MAX(CASE WHEN c.claim_type='current_title'    THEN c.value END) AS verified_title
+        FROM people p
+        JOIN batch_status b ON b.person_id = p.id AND b.phase = 'structuring' AND b.status = 'done'
+        LEFT JOIN claims c ON c.person_id = p.id
+          AND c.claim_type IN ('current_employer', 'current_title')
+          AND c.extraction_method != 'gnews'
+          AND c.extraction_method != 'firecrawl_news'
+    """
+    if name:
+        rows = conn.execute(
+            base_sql + " WHERE p.full_name = ? GROUP BY p.id", (name,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            base_sql + " GROUP BY p.id ORDER BY p.id"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def run(name: str | None) -> int:
+    firecrawl = Firecrawl(api_key=require_key("FIRECRAWL_API_KEY"))
+    anthropic = Anthropic(api_key=require_key("ANTHROPIC_API_KEY"))
+    pdl_key = os.getenv("PDL_API_KEY")
+    gnews_key = os.getenv("GNEWS_API_KEY")
+
+    with connect(DB_PATH) as conn:
+        people = _load_done_people(conn, name)
+        if not people:
+            print("No enriched people found.", file=sys.stderr)
+            return 1
+
+        print(f"Layering news+PDL onto {len(people)} already-enriched people...\n")
+
+        with httpx.Client(timeout=30.0) as http:
+            for p in people:
+                pid = p["id"]
+                full_name = p["full_name"]
+                company = p["company"] or ""
+                city = p["city"] or ""
+                new_claims = []
+
+                print(f"=== {full_name} | {company} ===")
+
+                # ── PDL ──────────────────────────────────────────────────────
+                if pdl_key:
+                    pdl = enrich_pdl(
+                        http, pdl_key, full_name, company, city,
+                        cost_usd_per_match=PDL_USD_PER_MATCH,
+                    )
+                    if pdl and pdl.claim_rows:
+                        new_claims.extend(pdl.claim_rows)
+                        print(f"  PDL: {len(pdl.claim_rows)} claims "
+                              f"(matched={pdl.matched}, ${pdl.cost_usd:.4f})")
+                    else:
+                        print("  PDL: no match")
+                else:
+                    print("  PDL: key not set — skipped")
+
+                # ── GNews ────────────────────────────────────────────────────
+                if gnews_key:
+                    news = fetch_news(http, gnews_key, full_name)
+                    if news and news.claim_rows:
+                        new_claims.extend(news.claim_rows)
+                        print(f"  GNews: {len(news.claim_rows)} articles "
+                              f"(total available: {news.total_articles})")
+                    else:
+                        print("  GNews: no results")
+                else:
+                    print("  GNews: key not set — skipped")
+
+                # ── Firecrawl press news ─────────────────────────────────────
+                verified_employer = p.get("verified_employer") or ""
+                verified_title = p.get("verified_title") or ""
+                if verified_employer:
+                    print(f"  Using verified profile: {verified_title or '(no title)'} @ {verified_employer}")
+                try:
+                    news_disc = discover_news(
+                        firecrawl, full_name, company,
+                        verified_employer=verified_employer,
+                        verified_title=verified_title,
+                    )
+                    fc_news = extract_news_mentions(
+                        anthropic, full_name, verified_employer or company, news_disc
+                    )
+                    if fc_news.claim_rows:
+                        new_claims.extend(fc_news.claim_rows)
+                        print(f"  Press news: {len(fc_news.claim_rows)} verified articles "
+                              f"({news_disc.credits_spent} Firecrawl credits)")
+                    else:
+                        print(f"  Press news: no results "
+                              f"({news_disc.credits_spent} credits spent)")
+                except PaymentRequiredError:
+                    print("  Press news: skipped — no Firecrawl credits "
+                          "(top up at firecrawl.dev)")
+
+                # ── Persist ──────────────────────────────────────────────────
+                # Load ALL existing claims, merge with new, normalize case,
+                # deduplicate, then replace the full set. No leftover stale
+                # rows, no duplicates, every re-run produces a clean profile.
+                existing_rows = conn.execute(
+                    "SELECT claim_type, value, source_url, quote, confidence, "
+                    "extraction_method FROM claims WHERE person_id = ?",
+                    (pid,),
+                ).fetchall()
+                existing = [
+                    ClaimRow(
+                        claim_type=r["claim_type"],
+                        value=r["value"],
+                        source_url=r["source_url"],
+                        quote=r["quote"] or "",
+                        confidence=r["confidence"],
+                        extraction_method=r["extraction_method"],
+                    )
+                    for r in existing_rows
+                ]
+                merged = digest_claims(existing + new_claims)
+                replace_claims(conn, pid, merged)
+                conn.commit()
+                delta = len(merged) - len(existing)
+                print(f"  → {len(merged)} total claims "
+                      f"({delta:+d} vs before, after dedup + normalize)")
+
+        print(f"\nDone. Run the web app to see updated profiles.")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="enrich-news-only", description=__doc__)
+    p.add_argument("--name", default=None, help="One specific person by full name")
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    return run(name=args.name)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
