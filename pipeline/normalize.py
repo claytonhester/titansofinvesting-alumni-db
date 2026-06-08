@@ -123,10 +123,18 @@ _FILENAME_RE = re.compile(r"\.(pdf|docx?|pptx?|xlsx?|html?|aspx|php)$", re.IGNOR
 _LOWER_UPPER_RE = re.compile(r"([a-z])([A-Z])")
 
 
+# The dup-collapse scan is O(n^3); a real link title is a handful of words. Cap it
+# so a pathologically long scraped <title> can't burn CPU — long titles aren't
+# doubled-phrase scrapes anyway.
+_MAX_COLLAPSE_TOKENS = 50
+
+
 def _collapse_adjacent_dups(tokens: list[str]) -> list[str]:
     """Remove an adjacent repeated phrase of 2+ tokens ("Paragon Intel Paragon
     Intel" -> "Paragon Intel"). Single-token repeats are left alone so legitimate
     cases ("Duran Duran", "New York, New York") survive."""
+    if len(tokens) > _MAX_COLLAPSE_TOKENS:
+        return list(tokens)
     out = list(tokens)
     changed = True
     while changed:
