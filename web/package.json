@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "sync-db": "node scripts/sync-db.mjs",
+    "predev": "node scripts/sync-db.mjs",
+    "prebuild": "node scripts/sync-db.mjs",
     "dev": "next dev -p 3210",
     "build": "next build",
     "start": "next start -p 3210",
@@ -13,6 +16,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",
+    "@upstash/redis": "^1.38.0",
     "better-sqlite3": "11.3.0",
     "next": "^16.2.6",
     "react": "^19.2.6",

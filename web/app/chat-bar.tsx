@@ -46,7 +46,13 @@ function renderContent(text: string): React.ReactNode[] {
   return nodes;
 }
 
-export default function ChatBar() {
+interface ChatBarProps {
+  // Signed, short-lived token minted during server render of the page. Echoed
+  // back on every request so the endpoint can verify the caller loaded the page.
+  token: string;
+}
+
+export default function ChatBar({ token }: ChatBarProps) {
   const [placeholderIdx, setPlaceholderIdx] = useState(0);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -82,7 +88,7 @@ export default function ChatBar() {
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-chat-token": token },
         body: JSON.stringify({ messages: nextHistory }),
       });
 

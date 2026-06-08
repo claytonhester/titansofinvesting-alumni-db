@@ -25,6 +25,11 @@ pipeline/data/chat_cost_log.jsonl
 pipeline/data/snapshots/*
 !pipeline/data/snapshots/.gitkeep
 
+# Bundled DB sidecars — commit only web/data/titans.db, never its WAL files
+web/data/*.db-shm
+web/data/*.db-wal
+web/data/*.db-journal
+
 # Node / Next.js
 node_modules/
 web/.next/

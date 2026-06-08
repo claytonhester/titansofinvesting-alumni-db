@@ -1,24 +1,25 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const { logTurn, isOverCap, planQuery, searchPeople, streamAnswer } =
+const { logTurnShared, isOverCapShared, planQuery, searchPeople, streamAnswer } =
   vi.hoisted(() => ({
-    logTurn: vi.fn(),
-    isOverCap: vi.fn(() => false),
+    logTurnShared: vi.fn(async () => true),
+    isOverCapShared: vi.fn(async () => false),
     planQuery: vi.fn(),
     searchPeople: vi.fn(() => []),
     streamAnswer: vi.fn(),
   }));
 
-vi.mock("@/lib/chat/cost-guard", () => ({ logTurn, isOverCap }));
+vi.mock("@/lib/chat/cost-guard", () => ({ logTurnShared, isOverCapShared }));
 vi.mock("@/lib/chat/plan", () => ({ planQuery }));
 vi.mock("@/lib/chat/search", () => ({ searchPeople }));
 vi.mock("@/lib/chat/synthesize", () => ({ streamAnswer }));
 vi.mock("@/lib/chat/guards", () => ({
   checkInput: () => ({ ok: true }),
   checkTopic: () => ({ ok: true }),
-  checkRate: () => ({ ok: true }),
+  checkRateShared: async () => ({ ok: true }),
   rejection: () => ({ ok: false, message: "rejected" }),
 }));
+vi.mock("@/lib/chat/auth", () => ({ checkAuth: () => ({ ok: true }) }));
 
 import { POST } from "./route";
 
@@ -41,7 +42,7 @@ async function drain(res: Response): Promise<void> {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  isOverCap.mockReturnValue(false);
+  isOverCapShared.mockResolvedValue(false);
   searchPeople.mockReturnValue([]);
   planQuery.mockResolvedValue({ usage: PLAN_USAGE, params: {} });
 });
@@ -55,8 +56,8 @@ describe("chat route cost accounting", () => {
 
     await drain(await POST(request()));
 
-    expect(logTurn).toHaveBeenCalledTimes(1);
-    expect(logTurn).toHaveBeenCalledWith({
+    expect(logTurnShared).toHaveBeenCalledTimes(1);
+    expect(logTurnShared).toHaveBeenCalledWith({
       input_tokens: PLAN_USAGE.input_tokens + 100,
       output_tokens: PLAN_USAGE.output_tokens + 50,
     });
@@ -70,8 +71,8 @@ describe("chat route cost accounting", () => {
 
     await drain(await POST(request()));
 
-    expect(logTurn).toHaveBeenCalledTimes(1);
-    expect(logTurn).toHaveBeenCalledWith(PLAN_USAGE);
+    expect(logTurnShared).toHaveBeenCalledTimes(1);
+    expect(logTurnShared).toHaveBeenCalledWith(PLAN_USAGE);
   });
 
   it("logs plan cost even if synthesis yields nothing at all", async () => {
@@ -82,7 +83,7 @@ describe("chat route cost accounting", () => {
 
     await drain(await POST(request()));
 
-    expect(logTurn).toHaveBeenCalledTimes(1);
-    expect(logTurn).toHaveBeenCalledWith(PLAN_USAGE);
+    expect(logTurnShared).toHaveBeenCalledTimes(1);
+    expect(logTurnShared).toHaveBeenCalledWith(PLAN_USAGE);
   });
 });

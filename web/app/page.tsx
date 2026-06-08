@@ -9,6 +9,7 @@ import {
 } from "@/lib/db";
 import { getNewsFeed } from "@/lib/news";
 import { getAlumniInsights } from "@/lib/insights";
+import { mintChatToken } from "@/lib/chat/auth";
 import Filters from "./filters";
 import Tabs from "./tabs";
 import NewsFeed from "./news-feed";
@@ -72,7 +73,7 @@ export default async function Home({
             source-attributed career data.
           </p>
 
-          <ChatBar />
+          <ChatBar token={mintChatToken()} />
         </div>
       </header>
 
