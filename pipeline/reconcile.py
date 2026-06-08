@@ -37,6 +37,25 @@ from structuring import HAIKU_MODEL
 
 RECONCILE_METHOD_SUFFIX = "+reconciled"
 
+
+def _source_family(method: str) -> str:
+    """Collapse an extraction_method to its source family, so a merged claim can
+    record every source that contributed (e.g. 'firecrawl+pdl+reconciled')."""
+    m = (method or "").lower().replace(RECONCILE_METHOD_SUFFIX, "")
+    if m.startswith("pdl"):
+        return "pdl"
+    if "linkedin" in m:
+        return "firecrawl_linkedin"
+    if "synthesis" in m:
+        return "synthesis"
+    if m.startswith("perplexity"):
+        return "perplexity"
+    if "firecrawl_news" in m or m.startswith("firecrawl-news"):
+        return "firecrawl_news"
+    if m.startswith("claude-haiku") or m.startswith("firecrawl"):
+        return "firecrawl"
+    return m or "unknown"
+
 # Claim types that describe résumé facts and benefit from semantic reconciliation.
 # Everything else (public_links, news_mention, ...) passes through untouched —
 # multiple distinct mentions are all valid and must not be merged.
@@ -179,9 +198,11 @@ def _parse_decisions(text: str, n: int) -> list[_Decision]:
     for fact in obj.get("facts") or []:
         if not isinstance(fact, dict):
             continue
-        members = tuple(
+        # dict.fromkeys dedupes while preserving order, so a model that repeats an
+        # index can't inflate a single claim into a phantom multi-member "merge".
+        members = tuple(dict.fromkeys(
             i for i in (fact.get("members") or []) if isinstance(i, int) and 0 <= i < n
-        )
+        ))
         if not members:
             continue
         value = str(fact.get("value") or "").strip()
@@ -218,14 +239,25 @@ def _apply(resume: list[ClaimRow], decisions: list[_Decision]) -> list[ClaimRow]
         else:
             absorbed, split_out = list(d.members), []
 
+        if not absorbed:
+            # The canonical value shares no distinctive token with ANY member —
+            # an untrustworthy LLM merge. Don't emit the canonical; re-emit every
+            # member verbatim so nothing is invented and nothing is lost.
+            for m in d.members:
+                rows.append(resume[m])
+            covered.update(d.members)
+            continue
+
         primary = resume[d.primary] if d.primary in absorbed else resume[absorbed[0]]
         claim_type = d.claim_type if d.claim_type in _RECONCILE_TYPES else primary.claim_type
         merged = len(absorbed) > 1
-        method = (
-            primary.extraction_method + RECONCILE_METHOD_SUFFIX
-            if merged and not primary.extraction_method.endswith(RECONCILE_METHOD_SUFFIX)
-            else primary.extraction_method
-        )
+        if merged:
+            # Record EVERY contributing source, not just the primary's, so we
+            # retain "Firecrawl and PDL both confirmed this" as future knowledge.
+            families = sorted({_source_family(resume[m].extraction_method) for m in absorbed})
+            method = "+".join(families) + RECONCILE_METHOD_SUFFIX
+        else:
+            method = primary.extraction_method
         rows.append(
             ClaimRow(
                 claim_type=claim_type,
