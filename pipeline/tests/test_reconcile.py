@@ -90,10 +90,11 @@ def test_apply_preserves_primary_provenance_and_marks_merge():
     out = _apply(resume, decisions)
     assert len(out) == 1
     row = out[0]
-    # primary=1 -> keep its source_url, quote; mark method as reconciled
+    # primary=1 -> keep its source_url, quote; record BOTH contributing sources
     assert row.source_url == "https://trs.texas.gov/bio"
     assert row.quote == "...verbatim..."
     assert row.extraction_method.endswith(RECONCILE_METHOD_SUFFIX)
+    assert "pdl" in row.extraction_method and "firecrawl" in row.extraction_method
 
 
 def test_apply_does_not_mark_single_member_groups():
@@ -136,6 +137,32 @@ def test_apply_splits_wrong_merge_of_distinct_companies():
     blob = " | ".join(c.value for c in out)
     assert "Sitio" in blob and "Falcon" in blob  # both companies survive
     assert len(out) == 2
+
+
+def test_apply_bad_canonical_matching_no_member_reemits_all():
+    # Regression: the LLM wrongly groups two distinct firms AND names a THIRD in
+    # the canonical value. The overlap guard would empty `absorbed`; _apply must
+    # NOT crash (IndexError) — it re-emits every member verbatim, invents nothing.
+    resume = [
+        _claim("career_history", "Analyst at Morgan Stanley"),
+        _claim("career_history", "Vice President at Barclays"),
+    ]
+    decisions = [_Decision("career_history", "Partner at Goldman Sachs", (0, 1), 0)]
+    out = _apply(resume, decisions)
+    vals = sorted(c.value for c in out)
+    assert vals == ["Analyst at Morgan Stanley", "Vice President at Barclays"]
+    assert not any("Goldman" in c.value for c in out)
+
+
+def test_source_family_maps_methods():
+    from reconcile import _source_family
+    assert _source_family("pdl") == "pdl"
+    assert _source_family("pdl+haiku-verify") == "pdl"
+    assert _source_family("claude-haiku-4-5-20251001") == "firecrawl"
+    assert _source_family("claude-haiku-4-5-synthesis") == "synthesis"
+    assert _source_family("perplexity+haiku-verify") == "perplexity"
+    assert _source_family("firecrawl-linkedin") == "firecrawl_linkedin"
+    assert _source_family("firecrawl_news") == "firecrawl_news"
 
 
 def test_apply_allows_merge_when_distinctive_token_shared():

@@ -25,6 +25,7 @@ from db import connect
 from discovery import discover_news
 from enrichment_store import ClaimRow, replace_claims
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
+from linkedin_firecrawl import fetch_linkedin
 from mention_discovery import discover_mentions
 from news_enrich import extract_news_mentions
 from normalize import digest_claims
@@ -105,11 +106,25 @@ def run(name: str | None) -> int:
                 else:
                     print("  PDL: key not set — skipped")
 
-                # ── Firecrawl press news ─────────────────────────────────────
                 verified_employer = p.get("verified_employer") or ""
                 verified_title = p.get("verified_title") or ""
                 if verified_employer:
                     print(f"  Using verified profile: {verified_title or '(no title)'} @ {verified_employer}")
+
+                # ── Firecrawl agent LinkedIn (core source) ───────────────────
+                try:
+                    li = fetch_linkedin(firecrawl, full_name,
+                                        employer=verified_employer or company, city=city)
+                    if li.claim_rows:
+                        new_claims.extend(li.claim_rows)
+                        print(f"  LinkedIn: {len(li.claim_rows)} claims "
+                              f"({li.credits_used} credits)")
+                    else:
+                        print("  LinkedIn: no confident profile found")
+                except PaymentRequiredError:
+                    print("  LinkedIn: skipped — no Firecrawl credits")
+
+                # ── Firecrawl press news ─────────────────────────────────────
                 try:
                     news_disc = discover_news(
                         firecrawl, full_name, company,
