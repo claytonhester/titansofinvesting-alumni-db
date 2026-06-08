@@ -8,6 +8,7 @@ rule is: first comma-field = name, last = city, middle (rejoined) = company.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 
 from bs4 import BeautifulSoup
 
@@ -35,6 +36,17 @@ def _parse_heading(text: str) -> tuple[int, str] | None:
     return int(match.group(2)), _school_from_prefix(match.group(1))
 
 
+def _dedupe_trailing_word(name: str) -> str:
+    """Collapse an immediately-repeated trailing word: 'Britain Winchell
+    Winchell' -> 'Britain Winchell'. This is a recurring typo in the public
+    directory; collapsing it keeps the parse stable and idempotent. Only the
+    exact final-word duplication is touched — internal repeats are left alone."""
+    words = name.split()
+    if len(words) >= 2 and words[-1].lower() == words[-2].lower():
+        return " ".join(words[:-1])
+    return name
+
+
 def _parse_entry(
     text: str, titan_class: int, school: str, source_url: str
 ) -> PersonRecord | None:
@@ -43,7 +55,7 @@ def _parse_entry(
     if len(parts) < 2:
         return None  # not a person row (stray text, header, etc.)
 
-    name = parts[0]
+    name = _dedupe_trailing_word(parts[0])
     if len(parts) == 2:
         company, city, needs_review = parts[1], _UNKNOWN_CITY, True
     else:
@@ -60,6 +72,37 @@ def _parse_entry(
         needs_review=needs_review,
         raw_entry=text.strip(),
     )
+
+
+def _assign_unique_slugs(records: list[PersonRecord]) -> list[PersonRecord]:
+    """Make every slug globally unique so /person/<slug> resolves one person.
+
+    Two alumni can share a name (e.g. two 'Devan Patel's in different cohorts).
+    The DB key is (name_slug, titan_class, school), but the web URL is the slug
+    alone — so same-name people MUST get distinct slugs or one is unreachable.
+
+    Disambiguation is DETERMINISTIC and STABLE: within a colliding base slug,
+    records are ordered by (titan_class, school, full_name); the first keeps the
+    base slug and the rest get '-2', '-3', … Because the order key never changes,
+    re-parsing the same directory always yields the same slugs, so a re-ingest is
+    a true no-op instead of spawning duplicate rows."""
+    by_base: dict[str, list[int]] = defaultdict(list)
+    for i, r in enumerate(records):
+        by_base[r.name_slug].append(i)
+
+    out = list(records)
+    for base, idxs in by_base.items():
+        if len(idxs) == 1:
+            continue
+        ordered = sorted(
+            idxs,
+            key=lambda i: (records[i].titan_class, records[i].school, records[i].full_name),
+        )
+        for rank, i in enumerate(ordered):
+            if rank == 0:
+                continue  # first occurrence keeps the bare base slug
+            out[i] = records[i].model_copy(update={"name_slug": f"{base}-{rank + 1}"})
+    return out
 
 
 def parse_directory(html: str, source_url: str) -> list[PersonRecord]:
@@ -88,4 +131,4 @@ def parse_directory(html: str, source_url: str) -> list[PersonRecord]:
             if record is not None:
                 records.append(record)
 
-    return records
+    return _assign_unique_slugs(records)
