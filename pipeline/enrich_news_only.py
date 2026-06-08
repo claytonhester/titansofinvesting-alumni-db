@@ -1,9 +1,11 @@
-"""Layer PDL + GNews + Firecrawl press-news onto already-enriched people.
+"""Layer PDL + Firecrawl press-news + verified public mentions onto already-
+enriched people.
 
-Reads career data from the DB, runs only the three optional sources, and
-APPENDS the new claims without touching existing career/education/bio rows.
-Use this to backfill news and deeper career data on people already enriched
-without re-running the expensive Firecrawl discovery step.
+Reads career data from the DB, runs only the optional sources, and APPENDS the
+new claims without touching existing career/education/bio rows. Use this to
+backfill deeper data on people already enriched without re-running the expensive
+Firecrawl discovery step — e.g. to add the Perplexity+Haiku verified-mention pass
+to profiles enriched before it existed.
 
     python enrich_news_only.py                   # all 'done' people
     python enrich_news_only.py --name "Jason Kaspar"
@@ -23,7 +25,7 @@ from db import connect
 from discovery import discover_news
 from enrichment_store import ClaimRow, replace_claims
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
-from gnews_enrich import fetch_news
+from mention_discovery import discover_mentions
 from news_enrich import extract_news_mentions
 from normalize import digest_claims
 from pdl_enrich import enrich_pdl
@@ -59,7 +61,7 @@ def run(name: str | None) -> int:
     firecrawl = Firecrawl(api_key=require_key("FIRECRAWL_API_KEY"))
     anthropic = Anthropic(api_key=require_key("ANTHROPIC_API_KEY"))
     pdl_key = os.getenv("PDL_API_KEY")
-    gnews_key = os.getenv("GNEWS_API_KEY")
+    perplexity_key = os.getenv("PERPLEXITY_API_KEY")
 
     with connect(DB_PATH) as conn:
         people = _load_done_people(conn, name)
@@ -94,18 +96,6 @@ def run(name: str | None) -> int:
                 else:
                     print("  PDL: key not set — skipped")
 
-                # ── GNews ────────────────────────────────────────────────────
-                if gnews_key:
-                    news = fetch_news(http, gnews_key, full_name)
-                    if news and news.claim_rows:
-                        new_claims.extend(news.claim_rows)
-                        print(f"  GNews: {len(news.claim_rows)} articles "
-                              f"(total available: {news.total_articles})")
-                    else:
-                        print("  GNews: no results")
-                else:
-                    print("  GNews: key not set — skipped")
-
                 # ── Firecrawl press news ─────────────────────────────────────
                 verified_employer = p.get("verified_employer") or ""
                 verified_title = p.get("verified_title") or ""
@@ -130,6 +120,23 @@ def run(name: str | None) -> int:
                 except PaymentRequiredError:
                     print("  Press news: skipped — no Firecrawl credits "
                           "(top up at firecrawl.dev)")
+
+                # ── Perplexity + Haiku verified mentions ─────────────────────
+                if perplexity_key:
+                    mentions = discover_mentions(
+                        http, anthropic, full_name,
+                        verified_employer or company, city,
+                        perplexity_key=perplexity_key,
+                    )
+                    if mentions.claim_rows:
+                        new_claims.extend(mentions.claim_rows)
+                        print(f"  Mentions: {mentions.verified} verified of "
+                              f"{mentions.after_filter} (found {mentions.found})")
+                    else:
+                        print(f"  Mentions: 0 verified "
+                              f"(found {mentions.found}, kept {mentions.after_filter})")
+                else:
+                    print("  Mentions: PERPLEXITY_API_KEY not set — skipped")
 
                 # ── Persist ──────────────────────────────────────────────────
                 # Load ALL existing claims, merge with new, normalize case,

@@ -168,7 +168,7 @@ python phase2_enrich.py --name "Jason Kaspar"
 ```
 === Jason Kaspar | Veritas Ark Fund | Austin ===
   Jason Kaspar: 4 sources -> 3 accepted (2 by pre-filter), 0 to review;
-  22 claims (+synth bio) (+2 PDL) (+1 GNews) (+1 press); 1 sent to Sonnet; 9 credits total
+  22 claims (+synth bio) (+2 PDL) (+1 press) (+2 verified mentions); 1 sent to Sonnet; 9 credits total
 ```
 
 **Cost per person (approximate):**
@@ -183,9 +183,9 @@ Costs are logged to `pipeline/data/cost_log.jsonl` after each run.
 
 ---
 
-### Phase 2 (backfill) — Add news + PDL to already-enriched people
+### Phase 2 (backfill) — Add PDL + press-news + verified mentions to enriched people
 
-If you enriched people before PDL/GNews/press-news keys were set, use this to layer those sources on top without re-running the expensive Firecrawl discovery:
+If you enriched people before PDL / press-news / Perplexity keys were set, use this to layer those sources on without re-running the expensive Firecrawl discovery. This is also how you run the **verified-mention pass on everyone already enriched**:
 
 ```bash
 # All already-enriched people
@@ -195,7 +195,10 @@ python enrich_news_only.py
 python enrich_news_only.py --name "Jason Kaspar"
 ```
 
-Safe to re-run — clears prior news and PDL rows before writing fresh ones.
+Safe to re-run — it reloads every existing claim, merges the new ones, then
+de-dupes + normalizes the whole set before writing, so re-runs converge instead
+of duplicating. (GNews has been retired; the Perplexity+Haiku verified-mention
+pass replaces it.)
 
 ---
 

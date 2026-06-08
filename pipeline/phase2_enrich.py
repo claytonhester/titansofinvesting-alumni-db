@@ -33,7 +33,6 @@ from firecrawl import Firecrawl
 
 from config import DB_PATH, require_key
 from cost_log import PDL_USD_PER_MATCH, append_entry, build_entry, remaining_credits
-from gnews_enrich import fetch_news
 from mention_discovery import discover_mentions
 from news_enrich import NewsEnrichResult, extract_news_mentions
 from discovery import DiscoveryResult, NewsDiscoveryResult, Source, _domain, discover, discover_news
@@ -83,7 +82,6 @@ class _PersonUsage:
     sonnet_out: int
     pdl_matches: int
     pdl_usd: float
-    gnews_requests: int
     fc_news_credits: int       # Firecrawl credits spent on the news-specific pass
     fc_news_articles: int      # confirmed news mentions found via Firecrawl+Claude
 
@@ -206,7 +204,6 @@ def enrich_person(
     person: Person,
     http: httpx.Client,
     pdl_key: str | None,
-    gnews_key: str | None,
     perplexity_key: str | None = None,
 ) -> _PersonUsage:
     """Run the full pipeline for one person and persist every stage. Records
@@ -248,8 +245,7 @@ def enrich_person(
         )
 
     # PDL deepens the verified résumé (canonical claim_types, identity-gated on
-    # likelihood); GNews adds unverified news_mention rows kept separate on the
-    # web side. Both skip cleanly when their key is unset and never raise, so a
+    # likelihood). Skips cleanly when its key is unset and never raises, so a
     # missing key or an outage degrades enrichment instead of aborting it.
     pdl = (
         enrich_pdl(
@@ -266,14 +262,8 @@ def enrich_person(
     if pdl is not None:
         claim_rows.extend(pdl.claim_rows)
 
-    news = fetch_news(http, gnews_key, person.full_name) if gnews_key else None
-    if news is not None:
-        claim_rows.extend(news.claim_rows)
-
     # Firecrawl + Claude news pass: search press/finance domains, scrape the
     # top hits, and use Haiku to verify identity and extract the mention.
-    # Runs on every person regardless of GNews key — the two sources are
-    # complementary (GNews = broad aggregator; this = deep press scrape).
     #
     # Use the verified employer + title from struct.profile so the news queries
     # are built from what Claude actually found ("Kayne Anderson Capital Advisors"
@@ -318,15 +308,15 @@ def enrich_person(
     n_pre = len(pre.decided)
     pdl_matched = bool(pdl and pdl.matched)
     n_pdl_claims = len(pdl.claim_rows) if pdl else 0
-    n_gnews = len(news.claim_rows) if news else 0
+    n_mentions = len(mentions.claim_rows)
     n_fc_news = len(fc_news.claim_rows)
     print(
         f"  {person.full_name}: {len(disc.sources)} sources -> "
         f"{n_accept} accepted ({n_pre} by pre-filter), {n_review} to review; "
         f"{len(claim_rows)} claims{' (+synth bio)' if bio else ''}"
         f"{f' (+{n_pdl_claims} PDL)' if n_pdl_claims else ''}"
-        f"{f' (+{n_gnews} GNews)' if n_gnews else ''}"
-        f"{f' (+{n_fc_news} press)' if n_fc_news else ''}; "
+        f"{f' (+{n_fc_news} press)' if n_fc_news else ''}"
+        f"{f' (+{n_mentions} verified mentions)' if n_mentions else ''}; "
         f"{len(pre.ambiguous)} sent to Sonnet; "
         f"{disc.credits_spent + news_disc.credits_spent} credits total"
     )
@@ -346,7 +336,6 @@ def enrich_person(
         sonnet_out=identity.output_tokens,
         pdl_matches=1 if pdl_matched else 0,
         pdl_usd=pdl.cost_usd if pdl else 0.0,
-        gnews_requests=news.request_count if news else 0,
         fc_news_credits=news_disc.credits_spent,
         fc_news_articles=n_fc_news,
     )
@@ -356,11 +345,10 @@ def run(limit: int, name: str | None) -> int:
     firecrawl = Firecrawl(api_key=require_key("FIRECRAWL_API_KEY"))
     anthropic = Anthropic(api_key=require_key("ANTHROPIC_API_KEY"))
 
-    # PDL/GNews keys are SOFT: their absence simply skips that source so existing
-    # runs keep working before the keys are funded. Each adapter is also billed
-    # (PDL per match) or rate-limited (GNews), so we read them once per run.
+    # PDL / Perplexity keys are SOFT: their absence simply skips that source so
+    # existing runs keep working before the keys are funded. Both are billed
+    # (PDL per match, Perplexity per search), so we read them once per run.
     pdl_key = os.getenv("PDL_API_KEY")
-    gnews_key = os.getenv("GNEWS_API_KEY")
     perplexity_key = os.getenv("PERPLEXITY_API_KEY")
 
     with connect(DB_PATH) as conn:
@@ -375,7 +363,7 @@ def run(limit: int, name: str | None) -> int:
         credits_before = remaining_credits(firecrawl)
         est_credits = 0
         haiku_in = haiku_out = sonnet_in = sonnet_out = 0
-        pdl_matches = gnews_requests = 0
+        pdl_matches = 0
         fc_news_credits = fc_news_articles = 0
         processed = 0
 
@@ -384,8 +372,7 @@ def run(limit: int, name: str | None) -> int:
                 print(f"\n=== {person.full_name} | {person.company} | {person.city} ===")
                 try:
                     usage = enrich_person(
-                        conn, firecrawl, anthropic, person, http, pdl_key, gnews_key,
-                        perplexity_key,
+                        conn, firecrawl, anthropic, person, http, pdl_key, perplexity_key,
                     )
                     conn.commit()  # persist each person before moving on (resumable)
                     est_credits += usage.credits + usage.fc_news_credits
@@ -394,7 +381,6 @@ def run(limit: int, name: str | None) -> int:
                     sonnet_in += usage.sonnet_in
                     sonnet_out += usage.sonnet_out
                     pdl_matches += usage.pdl_matches
-                    gnews_requests += usage.gnews_requests
                     fc_news_credits += usage.fc_news_credits
                     fc_news_articles += usage.fc_news_articles
                     processed += 1
@@ -429,7 +415,6 @@ def run(limit: int, name: str | None) -> int:
         credits_after=credits_after,
         estimated_credits=est_credits,
         pdl_matches=pdl_matches,
-        gnews_requests=gnews_requests,
     )
     append_entry(entry)
     if processed:
