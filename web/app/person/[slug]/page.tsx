@@ -152,7 +152,11 @@ export default async function PersonPage({
                   {resume.education.map((e, i) => (
                     <div className="edu" key={`${e.institution}-${i}`}>
                       <p className="edu-school">{e.institution}</p>
-                      {e.degree && <p className="edu-degree">{e.degree}</p>}
+                      {e.degrees.map((d, di) => (
+                        <p className="edu-degree" key={`${d}-${di}`}>
+                          {d}
+                        </p>
+                      ))}
                     </div>
                   ))}
                 </div>

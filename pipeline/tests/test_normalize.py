@@ -1,7 +1,7 @@
 """Tests for normalize.smart_title and normalize.digest_claims."""
 import pytest
 from enrichment_store import ClaimRow
-from normalize import smart_title, digest_claims
+from normalize import smart_title, digest_claims, is_junk_value
 
 
 def _claim(claim_type: str, value: str, confidence: float = 0.8, method: str = "haiku") -> ClaimRow:
@@ -65,6 +65,30 @@ class TestSmartTitle:
 
     def test_leading_trailing_whitespace_stripped(self):
         assert smart_title("  managing director  ") == "Managing Director"
+
+    def test_lowercase_acronyms_uppercased(self):
+        assert smart_title("assent llc") == "Assent LLC"
+        assert smart_title("kbre properties") == "KBRE Properties"
+        assert smart_title("secondee, private equity at kkr") == \
+            "Secondee, Private Equity at KKR"
+        assert smart_title("cfa charterholder") == "CFA Charterholder"
+
+    def test_word_like_suffixes_not_uppercased(self):
+        # Inc./Corp./Ltd./Co. read as words, not acronyms.
+        assert smart_title("caltex energy inc.") == "Caltex Energy Inc."
+        assert smart_title("acme corp") == "Acme Corp"
+
+    def test_ampersand_both_sides_capitalized(self):
+        assert smart_title("texas a&m university") == "Texas A&M University"
+        assert smart_title("r&d lead") == "R&D Lead"
+
+    def test_llp_suffix_with_existing_ampersand_company(self):
+        assert smart_title("akin gump strauss hauer & feld llp") == \
+            "Akin Gump Strauss Hauer & Feld LLP"
+
+    def test_acronym_idempotent(self):
+        once = smart_title("assent llc")
+        assert smart_title(once) == once
 
 
 # ── digest_claims ────────────────────────────────────────────────────────────
@@ -156,3 +180,27 @@ class TestDigestClaims:
         assert titles["current_employer"] == "Kayne Anderson"
         assert titles["career_history"] == "Analyst at Goldman Sachs (2010-2012)"
         assert titles["news_mention"] == "kayne anderson raises fund"
+
+    def test_junk_value_claims_are_dropped(self):
+        # A boolean/placeholder leaked into a field must never reach the DB.
+        claims = [
+            _claim("location", "True"),
+            _claim("location", "Austin, Texas"),
+            _claim("current_employer", "N/A"),
+        ]
+        result = digest_claims(claims)
+        values = {(c.claim_type, c.value) for c in result}
+        assert ("location", "Austin, Texas") in values
+        assert ("location", "True") not in values
+        assert all(c.value != "N/A" for c in result)
+        assert len(result) == 1
+
+
+class TestIsJunkValue:
+    @pytest.mark.parametrize("value", ["True", "false", "  YES ", "n/a", "Unknown", "-", "none"])
+    def test_recognizes_junk(self, value):
+        assert is_junk_value(value) is True
+
+    @pytest.mark.parametrize("value", ["Austin, Texas", "Managing Director", "KKR", "Trueblood Capital"])
+    def test_real_values_not_junk(self, value):
+        assert is_junk_value(value) is False

@@ -42,5 +42,8 @@ web/coverage/
 web/test-results/
 web/playwright-report/
 
+# Claude runtime lock (machine/session state — never track)
+.claude/scheduled_tasks.lock
+
 # OS
 .DS_Store
