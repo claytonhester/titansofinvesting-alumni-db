@@ -2,8 +2,9 @@ import { z } from "zod";
 import { planQuery, type ChatTurn } from "@/lib/chat/plan";
 import { searchPeople } from "@/lib/chat/search";
 import { streamAnswer } from "@/lib/chat/synthesize";
-import { checkInput, checkRate, checkTopic, rejection } from "@/lib/chat/guards";
-import { isOverCap, logTurn } from "@/lib/chat/cost-guard";
+import { checkInput, checkRateShared, checkTopic, rejection } from "@/lib/chat/guards";
+import { isOverCapShared, logTurnShared } from "@/lib/chat/cost-guard";
+import { checkAuth } from "@/lib/chat/auth";
 
 // better-sqlite3 + the Anthropic SDK need the Node.js runtime.
 export const runtime = "nodejs";
@@ -47,6 +48,11 @@ function textResponse(message: string, rejected: boolean): Response {
 }
 
 export async function POST(req: Request): Promise<Response> {
+  // Lightweight gate first (header-only, no body read): same-origin + a signed
+  // page token. Cheapest possible rejection for off-site/scripted callers.
+  const auth = checkAuth(req);
+  if (!auth.ok) return textResponse(auth.message!, true);
+
   let parsed: z.infer<typeof bodySchema>;
   try {
     parsed = bodySchema.parse(await req.json());
@@ -69,11 +75,11 @@ export async function POST(req: Request): Promise<Response> {
   const topicCheck = checkTopic(latest.content);
   if (!topicCheck.ok) return textResponse(topicCheck.message!, true);
 
-  const rateCheck = checkRate(clientIp(req));
+  const rateCheck = await checkRateShared(clientIp(req));
   if (!rateCheck.ok) return textResponse(rateCheck.message!, true);
 
   // Hard kill switch: if month-to-date spend has hit the cap, make NO API call.
-  if (isOverCap()) {
+  if (await isOverCapShared()) {
     return textResponse(rejection("over_cap").message!, true);
   }
 
@@ -106,7 +112,7 @@ export async function POST(req: Request): Promise<Response> {
           if (event.type === "text") {
             controller.enqueue(encoder.encode(event.text));
           } else if (event.type === "usage") {
-            logTurn({
+            await logTurnShared({
               input_tokens: planUsage.input_tokens + event.usage.input_tokens,
               output_tokens:
                 planUsage.output_tokens + event.usage.output_tokens,
@@ -119,7 +125,7 @@ export async function POST(req: Request): Promise<Response> {
           encoder.encode("\n\n(Sorry — the answer was cut short. Please try again.)")
         );
       } finally {
-        if (!logged) logTurn(planUsage);
+        if (!logged) await logTurnShared(planUsage);
         controller.close();
       }
     },

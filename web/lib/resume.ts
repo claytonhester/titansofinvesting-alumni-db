@@ -222,7 +222,10 @@ function currentRoleEntry(
 }
 
 function findLinkedIn(claims: Claim[]): string | null {
-  for (const c of claims) {
+  // Restrict to public_links claims only — searching all claim types risks
+  // matching a news_mention that references linkedin.com in a different context
+  // (e.g. an article about a different person at LinkedIn Inc.).
+  for (const c of claims.filter((c) => c.claim_type === "public_links")) {
     const haystack = `${c.value} ${c.source_url}`.toLowerCase();
     if (haystack.includes("linkedin.com")) {
       const match = `${c.value} ${c.source_url}`.match(

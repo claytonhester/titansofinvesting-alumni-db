@@ -1,15 +1,31 @@
 import Database from "better-sqlite3";
+import fs from "node:fs";
 import path from "node:path";
 
 // The pipeline owns all writes. The web app opens the SAME SQLite file
 // strictly READ-ONLY — it must never mutate the research database.
-const DB_PATH = path.join(process.cwd(), "..", "pipeline", "data", "titans.db");
+//
+// Path resolution (in priority order) so the app runs both locally and on a
+// serverless host where the repo's pipeline/ dir is NOT in the deployment:
+//   1. TITANS_DB_PATH env override (explicit wins).
+//   2. ./data/titans.db — the snapshot bundled INTO web/ at build time
+//      (see scripts/sync-db.mjs + next.config outputFileTracingIncludes).
+//      This is the only copy that ships to Vercel.
+//   3. ../pipeline/data/titans.db — local dev fallback when the bundle step
+//      hasn't run yet, reading the pipeline's live working copy directly.
+function resolveDbPath(): string {
+  const override = process.env.TITANS_DB_PATH;
+  if (override) return override;
+  const bundled = path.join(process.cwd(), "data", "titans.db");
+  if (fs.existsSync(bundled)) return bundled;
+  return path.join(process.cwd(), "..", "pipeline", "data", "titans.db");
+}
 
 let _db: Database.Database | null = null;
 
 function db(): Database.Database {
   if (_db) return _db;
-  _db = new Database(DB_PATH, { readonly: true, fileMustExist: true });
+  _db = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
   _db.pragma("query_only = true");
   _db.pragma("busy_timeout = 5000");
   return _db;

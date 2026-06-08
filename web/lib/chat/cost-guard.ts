@@ -1,5 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  hasSharedStore,
+  redisAddCostUsd,
+  redisMonthCostUsd,
+} from "./store";
 
 // Haiku 4.5 rates — kept in sync with pipeline/cost_log.py. Overridable via env
 // so a published price change can't silently make the spend cap wrong; an
@@ -123,9 +128,41 @@ export function logTurn(
   };
   try {
     // Single-writer assumption: one server instance owns this append-only log,
-    // so an unlocked appendFileSync is atomic enough. If this ever runs on
-    // multiple instances sharing the file, add file locking here.
+    // so an unlocked appendFileSync is atomic enough. On a multi-instance host
+    // use the Redis-backed logTurnShared() instead (see below) — this file path
+    // is only the single-instance backend and the serverless fallback.
     fs.appendFileSync(logPath, JSON.stringify(entry) + "\n", "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── Multi-instance entry points ──────────────────────────────────────────────
+// These are what the route calls. When Upstash is configured they use an atomic
+// Redis counter that is correct across instances; otherwise they delegate to the
+// in-process file functions above so local dev and tests need no external store.
+
+// Hard kill switch, fail-CLOSED: any error reading the shared counter reads as
+// "over cap" so a broken store can never silently disable the spend limit.
+export async function isOverCapShared(now: Date = new Date()): Promise<boolean> {
+  if (!hasSharedStore()) return isOverCap(now);
+  try {
+    return (await redisMonthCostUsd(currentMonth(now))) >= MONTHLY_CAP_USD;
+  } catch {
+    return true;
+  }
+}
+
+// Record one completed turn's spend. Best-effort: a store failure must not break
+// the user's answer, but it is surfaced via the boolean so callers can log it.
+export async function logTurnShared(
+  usage: TurnUsage,
+  now: Date = new Date()
+): Promise<boolean> {
+  if (!hasSharedStore()) return logTurn(usage, now);
+  try {
+    await redisAddCostUsd(currentMonth(now), usdForTokens(usage));
     return true;
   } catch {
     return false;

@@ -1,6 +1,8 @@
 // Visitor-facing guardrails for the public chat endpoint. All limits are cheap
 // pre-checks that run BEFORE any Anthropic call.
 
+import { hasSharedStore, redisCheckRate } from "./store";
+
 export const MAX_INPUT_CHARS = 500;
 export const RATE_LIMIT_PER_MIN = 8;
 const RATE_WINDOW_MS = 60_000;
@@ -67,6 +69,24 @@ export function checkRate(ip: string, now: number = Date.now()): GuardResult {
   }
   hits.set(ip, [...recent, now]);
   return { ok: true };
+}
+
+// Multi-instance rate check used by the route. Uses an atomic Redis counter when
+// Upstash is configured (correct across instances); otherwise delegates to the
+// in-memory limiter above so local dev and tests need no external store.
+// Fail-OPEN: a store error must not lock every visitor out — the monthly spend
+// cap is the real backstop, this just blunts a single abuser.
+export async function checkRateShared(
+  ip: string,
+  now: number = Date.now()
+): Promise<GuardResult> {
+  if (!hasSharedStore()) return checkRate(ip, now);
+  try {
+    const allowed = await redisCheckRate(ip, RATE_LIMIT_PER_MIN, RATE_WINDOW_MS, now);
+    return allowed ? { ok: true } : rejection("rate_limited");
+  } catch {
+    return { ok: true };
+  }
 }
 
 // Cheap topic pre-check: looks for any alumni/career/finance-ish signal. This is
