@@ -1,0 +1,161 @@
+"""Unit tests for reconcile.py's pure logic (partition / parse / apply).
+
+The single Haiku call in `reconcile_claims` is exercised live by the 50-person
+validation run; here we lock down the deterministic plumbing that turns a model
+response into reconciled ClaimRows, including the two non-negotiable safety
+guarantees: never drop a claim, never touch public mentions.
+"""
+from __future__ import annotations
+
+from enrichment_store import ClaimRow
+from reconcile import (
+    RECONCILE_METHOD_SUFFIX,
+    _Decision,
+    _apply,
+    _build_user,
+    _parse_decisions,
+    _partition,
+    _short_source,
+    _significant_tokens,
+)
+
+
+def _claim(ct, value, src="", method="pdl", conf=0.8, quote=""):
+    return ClaimRow(claim_type=ct, value=value, source_url=src, quote=quote,
+                    confidence=conf, extraction_method=method)
+
+
+def test_partition_keeps_mentions_out_of_reconciliation():
+    claims = [
+        _claim("career_history", "Analyst, TRS"),
+        _claim("public_links", "Bio page", src="https://x.com"),
+        _claim("current_employer", "TRS"),
+        _claim("news_mention", "Some article"),
+    ]
+    resume, passthrough = _partition(claims)
+    assert [c.claim_type for c in resume] == ["career_history", "current_employer"]
+    assert [c.claim_type for c in passthrough] == ["public_links", "news_mention"]
+
+
+def test_parse_decisions_clean():
+    text = (
+        '{"facts": [{"claim_type": "career_history", '
+        '"value": "Investment Analyst, Teacher Retirement System (2015-2018)", '
+        '"members": [0, 1], "primary": 1}]}'
+    )
+    d = _parse_decisions(text, 2)
+    assert len(d) == 1
+    assert d[0].members == (0, 1) and d[0].primary == 1
+
+
+def test_parse_decisions_drops_out_of_range_indices():
+    text = '{"facts": [{"claim_type": "education", "value": "X", "members": [0, 9], "primary": 9}]}'
+    d = _parse_decisions(text, 2)
+    # index 9 is dropped; primary 9 not in remaining members -> falls back to first.
+    assert len(d) == 1 and d[0].members == (0,) and d[0].primary == 0
+
+
+def test_parse_decisions_handles_fences_and_prose():
+    text = 'Sure:\n```json\n{"facts": [{"claim_type": "location", "value": "Austin", "members": [0], "primary": 0}]}\n```'
+    d = _parse_decisions(text, 1)
+    assert len(d) == 1 and d[0].value == "Austin"
+
+
+def test_parse_decisions_unusable_returns_empty():
+    assert _parse_decisions("not json", 3) == []
+    assert _parse_decisions('{"facts": "nope"}', 3) == []
+
+
+def test_apply_never_drops_an_unmentioned_claim():
+    resume = [
+        _claim("career_history", "Analyst, TRS"),
+        _claim("career_history", "Partner, Acme"),  # model forgets this one
+    ]
+    decisions = [_Decision("career_history", "Analyst, Teacher Retirement System", (0,), 0)]
+    out = _apply(resume, decisions)
+    values = sorted(c.value for c in out)
+    # the forgotten claim survives verbatim; the grouped one is recased
+    assert "Partner, Acme" in values
+    assert any("Teacher Retirement System" in c.value for c in out)
+    assert len(out) == 2
+
+
+def test_apply_preserves_primary_provenance_and_marks_merge():
+    resume = [
+        _claim("career_history", "Analyst, TRS", src="https://aggregator.com", method="pdl"),
+        _claim("career_history", "Investment Analyst at TRS 2015",
+               src="https://trs.texas.gov/bio", method="claude-haiku-4-5-20251001", quote="...verbatim..."),
+    ]
+    decisions = [_Decision("career_history", "Investment Analyst, TRS (2015)", (0, 1), 1)]
+    out = _apply(resume, decisions)
+    assert len(out) == 1
+    row = out[0]
+    # primary=1 -> keep its source_url, quote; mark method as reconciled
+    assert row.source_url == "https://trs.texas.gov/bio"
+    assert row.quote == "...verbatim..."
+    assert row.extraction_method.endswith(RECONCILE_METHOD_SUFFIX)
+
+
+def test_apply_does_not_mark_single_member_groups():
+    resume = [_claim("current_employer", "trs", method="pdl")]
+    decisions = [_Decision("current_employer", "TRS", (0,), 0)]
+    out = _apply(resume, decisions)
+    assert out[0].extraction_method == "pdl"  # no suffix for a 1-member group
+    assert out[0].value == "TRS"  # recased via smart_title
+
+
+def test_apply_leaves_short_bio_casing_untouched():
+    bio = "He leads investments at a Texas pension fund."
+    resume = [_claim("short_bio", bio, method="synthesis"),
+              _claim("short_bio", "shorter bio", method="pdl")]
+    decisions = [_Decision("short_bio", bio, (0, 1), 0)]
+    out = _apply(resume, decisions)
+    assert out[0].value == bio  # smart_title NOT applied to prose bios
+
+
+def test_short_source_prefers_host_then_method():
+    assert _short_source(_claim("x", "y", src="https://www.trs.texas.gov/bio")) == "trs.texas.gov"
+    assert _short_source(_claim("x", "y", src="", method="pdl")) == "pdl"
+
+
+def test_significant_tokens_strips_generic_role_words():
+    # "Chief Financial Officer" is all generic -> the only identity is the company.
+    assert _significant_tokens("Chief Financial Officer at Sitio Royalties") == {"sitio", "royalties"}
+    assert _significant_tokens("Managing Director at Chambers Energy Capital (2009-2021)") == {"chambers", "energy"}
+
+
+def test_apply_splits_wrong_merge_of_distinct_companies():
+    # The model wrongly groups two different CFO jobs; the guard must split them
+    # so neither company is erased.
+    resume = [
+        _claim("career_history", "Chief Financial Officer at Sitio Royalties (2021-2022)"),
+        _claim("career_history", "Chief Financial Officer of Falcon Minerals"),
+    ]
+    decisions = [_Decision("career_history", "Chief Financial Officer at Sitio Royalties (2021-2022)", (0, 1), 0)]
+    out = _apply(resume, decisions)
+    blob = " | ".join(c.value for c in out)
+    assert "Sitio" in blob and "Falcon" in blob  # both companies survive
+    assert len(out) == 2
+
+
+def test_apply_allows_merge_when_distinctive_token_shared():
+    # Same company, two phrasings (one richer) -> genuine merge, one row out.
+    resume = [
+        _claim("career_history", "Managing Director and Investment Committee Member at Chambers Energy Capital"),
+        _claim("career_history", "Managing Director at Chambers Energy Capital (2009-2021)"),
+    ]
+    decisions = [_Decision(
+        "career_history",
+        "Managing Director and Investment Committee Member at Chambers Energy Capital (2009-2021)",
+        (0, 1), 0,
+    )]
+    out = _apply(resume, decisions)
+    assert len(out) == 1
+    assert "Chambers" in out[0].value and "2009-2021" in out[0].value
+
+
+def test_build_user_numbers_every_claim():
+    resume = [_claim("career_history", "A"), _claim("education", "B")]
+    user = _build_user(resume)
+    assert "[0] career_history | A" in user
+    assert "[1] education | B" in user
