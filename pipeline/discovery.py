@@ -56,6 +56,18 @@ _NOISY = (
     "spokeo.com", "whitepages.com", "mylife.com",
 )
 
+# News domains used by discover_news() to filter to credible press coverage.
+# Finance/investment-specific outlets are included alongside general business press.
+NEWS_DOMAINS: frozenset[str] = frozenset({
+    "bloomberg.com", "wsj.com", "reuters.com", "forbes.com", "ft.com",
+    "businesswire.com", "prnewswire.com", "cnbc.com", "marketwatch.com",
+    "barrons.com", "techcrunch.com", "axios.com", "businessinsider.com",
+    "institutionalinvestor.com", "pionline.com", "citywire.com",
+    "fa-mag.com", "thinkadvisor.com", "investmentnews.com",
+    "wealthmanagement.com", "fundfire.com", "peievents.com",
+    "privateequitywire.co.uk", "hedgeweek.com", "alternativeswatch.com",
+})
+
 
 @dataclass(frozen=True)
 class Source:
@@ -88,16 +100,18 @@ def build_queries(
     company: str,
     city: str,
 ) -> list[str]:
-    """Heuristic, model-free query set covering the 'Quick' research angles:
-    career history, current role, public writing/talks, news. Append
-    company/city only where it sharpens the angle (fire-enrich enhanceQuery)."""
+    """Heuristic, model-free query set focused on CAREER data only — news is
+    handled by the separate discover_news() pass which runs after structuring
+    and uses profile-aware queries. Five angles, each returning distinct pages:
+    identity anchor, career depth, finance-specific profile, location-
+    disambiguated bio, and public writing/talks."""
     name = full_name.strip()
     return [
-        f'"{name}" {company}',                         # identity + current role
-        f'"{name}" {company} career history background',
-        f'"{name}" {city} executive profile',           # location-disambiguated
-        f'"{name}" interview OR podcast OR article author',  # public writing/talks
-        f'"{name}" {company} news announcement',         # news
+        f'"{name}" {company}',                              # identity anchor
+        f'"{name}" {company} career background portfolio',  # career depth
+        f'"{name}" investor fund manager partner director', # finance role signal
+        f'"{name}" {city} executive profile bio',           # location-disambiguated
+        f'"{name}" interview podcast article author wrote', # public writing/talks
     ]
 
 
@@ -155,6 +169,148 @@ def _as_candidate(item: object, full_name: str) -> _Candidate | None:
     )
 
 
+@dataclass(frozen=True)
+class NewsDiscoveryResult:
+    """News-specific discovery: scraped articles from credible press domains.
+
+    Separate from DiscoveryResult so the news pass can be run independently
+    and its credit cost tracked distinctly. sources are already filtered to
+    NEWS_DOMAINS — every entry is a scraped press article."""
+
+    sources: tuple[Source, ...]
+    credits_spent: int
+
+
+def build_news_queries(
+    full_name: str,
+    *,
+    verified_employer: str = "",
+    verified_title: str = "",
+    fallback_company: str = "",
+) -> list[str]:
+    """Build profile-aware news search queries using what Claude already
+    extracted from the career pass. Falls back to the raw directory company
+    string only when the structured profile has nothing.
+
+    Using the verified employer ("Kayne Anderson Capital Advisors") instead of
+    the raw directory string ("Entrepreneur, Kayne Anderson, Texas...") produces
+    far more precise results and avoids wasting scrape credits on noise."""
+    name = full_name.strip()
+
+    # Prefer verified employer; fall back to raw company as a last resort.
+    firm = verified_employer.strip() or fallback_company.strip()
+
+    # Always quote the firm name if it has spaces — prevents partial matches.
+    firm_q = f'"{firm}"' if " " in firm else firm
+
+    queries: list[str] = []
+
+    # Core: name + verified firm — most precise anchor.
+    if firm:
+        queries.append(f'"{name}" {firm_q} news')
+
+    # Investment/deal-specific — tuned for this crowd (PMs, founders, VCs).
+    if firm:
+        queries.append(f'"{name}" {firm_q} fund investment deal announcement')
+    else:
+        queries.append(f'"{name}" fund investment deal announcement')
+
+    # Title-aware query when we know their role.
+    if verified_title:
+        # Strip generic words that add noise; keep the role signal.
+        role_kws = " ".join(
+            w for w in verified_title.split()
+            if w.lower() not in {"of", "the", "and", "at", "a", "an"}
+        )
+        if role_kws:
+            queries.append(f'"{name}" {role_kws}')
+
+    # Awards / lists / recognition — valuable for this alumni crowd.
+    queries.append(f'"{name}" award named recognized featured profile')
+
+    return queries
+
+
+def discover_news(
+    client: Firecrawl,
+    full_name: str,
+    company: str,
+    *,
+    verified_employer: str = "",
+    verified_title: str = "",
+    max_articles: int = 5,
+    per_query_limit: int = 5,
+    backoff_base: float = 1.5,
+) -> NewsDiscoveryResult:
+    """Search for news articles specifically about a person, scraping only
+    credible press/finance domains. Complements discover() — the two passes
+    run independently and their credit costs are tracked separately.
+
+    Pass ``verified_employer`` and ``verified_title`` from the structured
+    profile (already extracted by Claude Haiku) to build precise, profile-
+    aware queries instead of searching against the raw directory company string.
+    Falls back to ``company`` when the profile fields are empty.
+
+    Keeps at most ``max_articles`` scraped pages, one per domain.
+    Never raises: any failure yields an empty result."""
+    queries = build_news_queries(
+        full_name,
+        verified_employer=verified_employer,
+        verified_title=verified_title,
+        fallback_company=company,
+    )
+
+    import logging
+    _log = logging.getLogger(__name__)
+
+    # PaymentRequiredError fires on SEARCH (no credits) as well as SCRAPE.
+    # _search_with_retry re-raises it as a run-level fatal for the career pass,
+    # but discover_news() is optional — no credits means empty result, not crash.
+    by_domain: dict[str, _Candidate] = {}
+    try:
+        for query in queries:
+            for item in _search_with_retry(client, query, per_query_limit, backoff_base):
+                cand = _as_candidate(item, full_name)
+                if cand is None:
+                    continue
+                dom = _domain(cand.url)
+                if not any(dom == d or dom.endswith("." + d) for d in NEWS_DOMAINS):
+                    continue
+                existing = by_domain.get(dom)
+                if existing is None or cand.relevance > existing.relevance:
+                    by_domain[dom] = cand
+    except PaymentRequiredError:
+        _log.warning("discover_news: no Firecrawl credits — news search skipped for %s", full_name)
+        return NewsDiscoveryResult(sources=(), credits_spent=0)
+
+    keepers = sorted(by_domain.values(), key=lambda c: c.relevance, reverse=True)[:max_articles]
+
+    sources: list[Source] = []
+    credits_spent = 0
+    for cand in keepers:
+        try:
+            markdown = _scrape_with_retry(client, cand.url, backoff_base)
+        except PaymentRequiredError:
+            _log.warning("discover_news: no Firecrawl credits — news scrape aborted for %s", full_name)
+            break
+        except _SCRAPE_RERAISE:
+            continue
+        except Exception:
+            continue
+        credits_spent += 1
+        if not markdown.strip():
+            continue
+        sources.append(Source(
+            url=cand.url,
+            title=cand.title,
+            description=cand.description,
+            markdown=markdown,
+            relevance=cand.relevance,
+        ))
+
+    return NewsDiscoveryResult(sources=tuple(sources), credits_spent=credits_spent)
+
+
 def discover(
     client: Firecrawl,
     full_name: str,
@@ -162,7 +318,7 @@ def discover(
     city: str,
     *,
     per_query_limit: int = 4,
-    max_sources: int = 8,
+    max_sources: int = 5,
     backoff_base: float = 1.5,
 ) -> DiscoveryResult:
     """Search all angle queries (cheap, no scrape), dedupe by domain + rank, then
