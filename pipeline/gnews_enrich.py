@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import httpx
 
 from enrichment_store import ClaimRow
+from news_score import has_meaningful_employer
 
 GNEWS_SEARCH_URL = "https://gnews.io/api/v4/search"
 EXTRACTION_METHOD = "gnews"
@@ -46,25 +47,39 @@ class NewsResult:
 _EMPTY = NewsResult(claim_rows=(), request_count=0, total_articles=0)
 
 
+def build_query(full_name: str, employer: str | None = None) -> str:
+    """GNews search string: exact-phrase name, optionally AND-ed with a
+    distinctive employer ("Jane Roe" AND "Longhorn Ventures"). A generic or
+    missing employer falls back to the name alone."""
+    name = full_name.strip()
+    if not name:
+        return ""
+    if has_meaningful_employer(employer):
+        return f'"{name}" AND "{employer.strip()}"'
+    return f'"{name}"'
+
+
 def fetch_news(
     client: httpx.Client,
     api_key: str,
     full_name: str,
     *,
+    employer: str | None = None,
     max_articles: int = 5,
     lang: str = "en",
     attempts: int = 3,
     backoff_base: float = 1.5,
 ) -> NewsResult:
-    """Search GNews for a person's name and map hits to news_mention ClaimRows.
-    Returns an empty result on no hits, an outage, or a parse failure — never
-    raises. ``request_count`` is 1 when a request was actually issued, else 0."""
-    name = full_name.strip()
-    if not name:
+    """Search GNews for a person (name, optionally AND employer) and map hits to
+    news_mention ClaimRows. Returns an empty result on no hits, an outage, or a
+    parse failure — never raises. ``request_count`` is 1 when a request was
+    actually issued, else 0."""
+    query = build_query(full_name, employer)
+    if not query:
         return _EMPTY
 
     params = {
-        "q": f'"{name}"',
+        "q": query,
         "token": api_key,
         "lang": lang,
         "max": max_articles,

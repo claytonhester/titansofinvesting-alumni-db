@@ -34,6 +34,7 @@ from firecrawl import Firecrawl
 from config import DB_PATH, require_key
 from cost_log import PDL_USD_PER_MATCH, append_entry, build_entry, remaining_credits
 from gnews_enrich import fetch_news
+from mention_discovery import discover_mentions
 from news_enrich import NewsEnrichResult, extract_news_mentions
 from discovery import DiscoveryResult, NewsDiscoveryResult, Source, _domain, discover, discover_news
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
@@ -206,6 +207,7 @@ def enrich_person(
     http: httpx.Client,
     pdl_key: str | None,
     gnews_key: str | None,
+    perplexity_key: str | None = None,
 ) -> _PersonUsage:
     """Run the full pipeline for one person and persist every stage. Records
     batch_status per phase so a crash mid-batch resumes cleanly. Returns the
@@ -291,6 +293,19 @@ def enrich_person(
     if fc_news.claim_rows:
         claim_rows.extend(fc_news.claim_rows)
 
+    # Perplexity search + Haiku identity check: confirmed public mentions (bios,
+    # profiles, regulatory records). Stored as public_links. Key-gated and
+    # never-raises, so it skips cleanly when PERPLEXITY_API_KEY is unset. Uses the
+    # verified employer/title when known for a sharper query than the raw directory
+    # company.
+    mentions = discover_mentions(
+        http, anthropic, person.full_name,
+        _verified_employer or person.company, person.city,
+        perplexity_key=perplexity_key,
+    )
+    if mentions.claim_rows:
+        claim_rows.extend(mentions.claim_rows)
+
     # Normalize casing and deduplicate before persisting — ensures "senior
     # investment manager" and "Senior Investment Manager" from two sources
     # collapse to one properly-cased entry.
@@ -346,6 +361,7 @@ def run(limit: int, name: str | None) -> int:
     # (PDL per match) or rate-limited (GNews), so we read them once per run.
     pdl_key = os.getenv("PDL_API_KEY")
     gnews_key = os.getenv("GNEWS_API_KEY")
+    perplexity_key = os.getenv("PERPLEXITY_API_KEY")
 
     with connect(DB_PATH) as conn:
         init_schema(conn)
@@ -368,7 +384,8 @@ def run(limit: int, name: str | None) -> int:
                 print(f"\n=== {person.full_name} | {person.company} | {person.city} ===")
                 try:
                     usage = enrich_person(
-                        conn, firecrawl, anthropic, person, http, pdl_key, gnews_key
+                        conn, firecrawl, anthropic, person, http, pdl_key, gnews_key,
+                        perplexity_key,
                     )
                     conn.commit()  # persist each person before moving on (resumable)
                     est_credits += usage.credits + usage.fc_news_credits

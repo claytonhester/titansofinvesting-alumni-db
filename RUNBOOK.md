@@ -33,6 +33,7 @@ cp .env.example .env
 | `ANTHROPIC_API_KEY` | **Yes** | Claude extraction + identity resolution | [console.anthropic.com](https://console.anthropic.com) |
 | `PDL_API_KEY` | Optional | Structured career data (charged ~$0.28/match) | [peopledatalabs.com](https://peopledatalabs.com) |
 | `GNEWS_API_KEY` | Optional | News mentions (flat monthly subscription) | [gnews.io](https://gnews.io) |
+| `PERPLEXITY_API_KEY` | Optional | Identity-verified public mentions/profiles (~$0.005/person + a small Haiku call) | [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api) |
 
 PDL and GNews have free tiers (100 records/month and 100 requests/day). If keys are absent the pipeline skips those sources gracefully — it still works, just with less data.
 
@@ -118,6 +119,28 @@ company), **groups education** (one card per school, degrees listed once), and
 hides any junk that slipped through. So a person with zero prior data comes in,
 gets cleaned on write, and is sorted + de-duplicated on display — start to finish,
 no hand-fixing.
+
+### Verified public mentions (Perplexity + Haiku)
+
+When `PERPLEXITY_API_KEY` is set, Phase 2 also runs a discovery pass that beat
+GNews/GDELT badly in testing (see `news_experiment.py`):
+
+1. **Perplexity Search** for the person (name + employer) — finds bios, firm
+   leadership pages, FINRA records, profiles, press.
+2. **Drop aggregator domains** — people-search / data-broker junk (`news_score`).
+3. **Claude Haiku identity check** (`news_verify`) — confirms each result is
+   actually *this* person, not a namesake (kills the "Confederate general named
+   Thomas Green" problem string-matching can't).
+
+Survivors are stored as `public_links` claims → they render in the web
+"Mentions & appearances" section, and like all name-search results stay OUT of
+the hard résumé. Cost ≈ **$0.005/person + a small Haiku call** (~$7 for the full
+base). Key-gated and never-raises: unset the key and the pass simply skips.
+
+To experiment with strategies/sources before a big run:
+```bash
+python news_experiment.py --limit 12 --sources perplexity --verify --drop-aggregators
+```
 
 ---
 
