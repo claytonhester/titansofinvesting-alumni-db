@@ -1,4 +1,6 @@
 import type { Claim, Person } from "./db";
+import { smartTitle } from "./normalize";
+import { groupEducation, type EducationGroup } from "./education";
 
 export interface ExperienceEntry {
   title: string;
@@ -6,13 +8,6 @@ export interface ExperienceEntry {
   start: string | null;
   end: string | null;
   current: boolean;
-  confidence: number;
-  sourceUrl: string;
-}
-
-export interface EducationEntry {
-  degree: string | null;
-  institution: string;
   confidence: number;
   sourceUrl: string;
 }
@@ -51,7 +46,7 @@ export interface Resume {
   linkedinUrl: string | null;
   experience: ExperienceEntry[];
   experienceGroups: ExperienceGroup[];
-  education: EducationEntry[];
+  education: EducationGroup[];
   links: ResumeLink[];
   news: NewsItem[];
   sources: string[];
@@ -60,6 +55,11 @@ export interface Resume {
 }
 
 const NOW_TOKENS = new Set(["now", "present", "current"]);
+
+// Non-place values that have leaked into location claims and must never render.
+const JUNK_LOCATIONS = new Set([
+  "true", "false", "yes", "no", "n/a", "na", "unknown", "none", "null",
+]);
 
 function normalizeEnd(raw: string | null): { end: string | null; current: boolean } {
   if (!raw) return { end: null, current: false };
@@ -71,15 +71,32 @@ function normalizeEnd(raw: string | null): { end: string | null; current: boolea
 const QUOTE_RE = /^(now|present|\d{4})\s*[-–]\s*(now|present|\d{4})\s+(.*?)\s+@\s+(.+)$/i;
 // career_history value: "Title at Company (2018-2020)"
 const VALUE_RE = /^(.+?)\s+at\s+(.+?)\s*\((now|present|\d{4})\s*[-–]\s*(now|present|\d{4})\)\s*$/i;
+// "Title at Company (2019)" — single-year value form.
+const SINGLE_YEAR_RE = /^(.+?)\s+at\s+(.+?)\s*\((now|present|\d{4})\)\s*$/i;
+// "Title at Company" — dateless narrative form (a prose claim with no parsable
+// date range). Parsed so the company is known and the entry can dedup/group
+// with its dated twin instead of floating as a bare title.
+const ATONLY_RE = /^(.+?)\s+at\s+(.+)$/i;
+
+// Drop a trailing year parenthetical — "(2019)" / "(2019-2020)" — but keep a
+// descriptive one like "(Teacher Retirement System of Texas)".
+function stripYearParen(value: string): string {
+  return value
+    .replace(/\s*\((?:19|20)\d{2}(?:\s*[-–]\s*(?:(?:19|20)\d{2}|present|now))?\)\s*$/i, "")
+    .trim();
+}
 
 function parseExperience(claim: Claim): ExperienceEntry {
+  // Title/company are title-cased on the way out: the quote is captured
+  // verbatim (often lowercase) and even the normalized value can carry source
+  // quirks ("Kbre", "Llc"), so smartTitle is the render-time guarantee.
   const fromQuote = claim.quote?.match(QUOTE_RE);
   if (fromQuote) {
     const [, start, end, title, company] = fromQuote;
     const norm = normalizeEnd(end);
     return {
-      title: title.trim(),
-      company: company.trim(),
+      title: smartTitle(title.trim()),
+      company: smartTitle(company.trim()),
       start: start.trim(),
       ...norm,
       confidence: claim.confidence,
@@ -91,16 +108,42 @@ function parseExperience(claim: Claim): ExperienceEntry {
     const [, title, company, start, end] = fromValue;
     const norm = normalizeEnd(end);
     return {
-      title: title.trim(),
-      company: company.trim(),
+      title: smartTitle(title.trim()),
+      company: smartTitle(company.trim()),
       start: start.trim(),
       ...norm,
       confidence: claim.confidence,
       sourceUrl: claim.source_url,
     };
   }
+  const singleYear = claim.value.match(SINGLE_YEAR_RE);
+  if (singleYear) {
+    const [, title, company, year] = singleYear;
+    const norm = normalizeEnd(year);
+    return {
+      title: smartTitle(title.trim()),
+      company: smartTitle(company.trim()),
+      start: norm.current ? null : year.trim(),
+      ...norm,
+      confidence: claim.confidence,
+      sourceUrl: claim.source_url,
+    };
+  }
+  const atOnly = claim.value.match(ATONLY_RE);
+  if (atOnly) {
+    const [, title, company] = atOnly;
+    return {
+      title: smartTitle(title.trim()),
+      company: smartTitle(stripYearParen(company.trim())),
+      start: null,
+      end: null,
+      current: false,
+      confidence: claim.confidence,
+      sourceUrl: claim.source_url,
+    };
+  }
   return {
-    title: claim.value,
+    title: smartTitle(claim.value),
     company: "",
     start: null,
     end: null,
@@ -122,19 +165,110 @@ function yearOf(raw: string | null): number | null {
   return Number.isNaN(n) ? null : n;
 }
 
+// Lowercased, punctuation-stripped tokens — the basis for comparing titles and
+// companies that differ only in case/punctuation ("Och-Ziff" vs "Och-ziff").
+function normalizeText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+// How much date information an entry carries: a dated/current entry is richer
+// than one with only a start, which is richer than a dateless prose entry.
+function dateRank(e: ExperienceEntry): number {
+  if (e.current || e.end) return 2;
+  if (e.start) return 1;
+  return 0;
+}
+
+// Remove duplicate roles that the same person picked up from two sources — a
+// dated structured claim and a dateless prose claim describing the same job.
+// Two entries collide on (title, company); the richer one (more date info, then
+// higher confidence) wins. Order of first appearance is preserved.
+function dedupeExperience(entries: ExperienceEntry[]): ExperienceEntry[] {
+  const best = new Map<string, ExperienceEntry>();
+  const order: string[] = [];
+  for (const e of entries) {
+    const key = `${normalizeText(e.title)}|${normalizeText(e.company)}`;
+    const current = best.get(key);
+    if (!current) {
+      best.set(key, e);
+      order.push(key);
+      continue;
+    }
+    const richer =
+      dateRank(e) > dateRank(current) ||
+      (dateRank(e) === dateRank(current) && e.confidence > current.confidence);
+    if (richer) best.set(key, e);
+  }
+  return order.map((k) => best.get(k)!);
+}
+
+// Drop a dateless prose entry that has no parsed company but names — in its
+// text — a company already covered by a dated role. "Investment Banking Division
+// of Lehman Brothers" is dropped when "...at Lehman Brothers (2006-2009)" exists,
+// while "Chief Financial Officer of Falcon Minerals" survives because Falcon
+// appears nowhere else (it is real, additional history).
+function dropRedundantProse(entries: ExperienceEntry[]): ExperienceEntry[] {
+  const datedCompanies = entries
+    .filter((e) => e.company && dateRank(e) > 0)
+    .map((e) => normalizeText(e.company))
+    .filter((c) => c.split(" ").length >= 2 && c.length >= 6);
+
+  return entries.filter((e) => {
+    const isProse = !e.company && dateRank(e) === 0;
+    if (!isProse) return true;
+    const text = normalizeText(e.title).split(" ");
+    return !datedCompanies.some((c) => isContiguousTokenRun(c.split(" "), text));
+  });
+}
+
+// True when `short` appears as a contiguous run of tokens inside `long` — used
+// to fold company-name variants together ("Teacher Retirement System of Texas"
+// inside "Texas Teachers (Teacher Retirement System of Texas)"). Guarded to ≥2
+// tokens / ≥6 chars so generic fragments ("capital", "partners") never merge
+// two genuinely different firms.
+function isContiguousTokenRun(short: string[], long: string[]): boolean {
+  if (short.length < 2 || short.join("").length < 6) return false;
+  if (short.length > long.length) return false;
+  for (let i = 0; i + short.length <= long.length; i += 1) {
+    if (short.every((tok, j) => long[i + j] === tok)) return true;
+  }
+  return false;
+}
+
+// Map each distinct company key to a canonical winner, folding any key that is a
+// contiguous token-run of another into the longer (more specific) one.
+function mergeCompanyKeys(keys: string[]): Map<string, string> {
+  const unique = Array.from(new Set(keys));
+  const winner = new Map<string, string>();
+  for (const key of unique) {
+    const longer = unique.find(
+      (other) =>
+        other !== key &&
+        other.length > key.length &&
+        isContiguousTokenRun(key.split(" "), other.split(" "))
+    );
+    winner.set(key, longer ?? key);
+  }
+  return winner;
+}
+
 // Collapse roles at the same employer into one group so a person's multiple
 // stints read as one company with nested roles (LinkedIn-style) rather than the
 // company name repeating on every row. Empty-company entries never merge — each
 // stays its own group. Roles within a group sort newest-first; groups order by
 // their newest role so a grouped company keeps its place in the timeline.
 function groupExperience(entries: ExperienceEntry[]): ExperienceGroup[] {
+  const merges = mergeCompanyKeys(
+    entries.map((e) => normalizeText(e.company)).filter(Boolean)
+  );
+
   const order: string[] = [];
   const byKey = new Map<string, ExperienceEntry[]>();
 
   entries.forEach((e, i) => {
-    const co = e.company.trim();
+    const norm = normalizeText(e.company);
     // Solo / unknown-company entries get a unique key so they never coalesce.
-    const key = co ? `co:${co.toLowerCase()}` : `solo:${i}`;
+    const key = norm ? `co:${merges.get(norm) ?? norm}` : `solo:${i}`;
     const bucket = byKey.get(key);
     if (bucket) {
       bucket.push(e);
@@ -161,24 +295,6 @@ function groupExperience(entries: ExperienceEntry[]): ExperienceGroup[] {
   const groupKey = (g: ExperienceGroup): number =>
     Math.max(...g.roles.map(sortKey));
   return groups.sort((a, b) => groupKey(b) - groupKey(a));
-}
-
-function parseEducation(claim: Claim): EducationEntry {
-  const idx = claim.value.toLowerCase().indexOf(" from ");
-  if (idx !== -1) {
-    return {
-      degree: claim.value.slice(0, idx).trim(),
-      institution: claim.value.slice(idx + 6).trim(),
-      confidence: claim.confidence,
-      sourceUrl: claim.source_url,
-    };
-  }
-  return {
-    degree: null,
-    institution: claim.value.trim(),
-    confidence: claim.confidence,
-    sourceUrl: claim.source_url,
-  };
 }
 
 function firstValue(claims: Claim[], type: string): Claim | undefined {
@@ -211,8 +327,8 @@ function currentRoleEntry(
 
   const src = firstValue(claims, "current_title") ?? firstValue(claims, "current_employer");
   return {
-    title: currentTitle ?? "",
-    company: currentEmployer ?? "",
+    title: smartTitle(currentTitle ?? ""),
+    company: smartTitle(currentEmployer ?? ""),
     start: null,
     end: null,
     current: true,
@@ -266,31 +382,40 @@ export function buildResume(person: Person, claims: Claim[]): Resume {
     .filter((c) => c.claim_type === "news_mention")
     .map(parseNews);
 
-  const currentTitle = firstValue(verified, "current_title")?.value ?? null;
-  const currentEmployer = firstValue(verified, "current_employer")?.value ?? null;
+  const currentTitleRaw = firstValue(verified, "current_title")?.value ?? null;
+  const currentEmployerRaw = firstValue(verified, "current_employer")?.value ?? null;
+  const currentTitle = currentTitleRaw ? smartTitle(currentTitleRaw) : null;
+  const currentEmployer = currentEmployerRaw ? smartTitle(currentEmployerRaw) : null;
 
   const careerHistory = verified
     .filter((c) => c.claim_type === "career_history")
     .map(parseExperience);
 
   const current = currentRoleEntry(verified, currentTitle, currentEmployer, careerHistory);
-  const experience = (current ? [current, ...careerHistory] : careerHistory).sort(
+  const combined = current ? [current, ...careerHistory] : careerHistory;
+  const experience = dropRedundantProse(dedupeExperience(combined)).sort(
     (a, b) => sortKey(b) - sortKey(a)
   );
 
-  const education = verified
-    .filter((c) => c.claim_type === "education")
-    .map(parseEducation)
-    .sort((a, b) => b.confidence - a.confidence);
+  const education = groupEducation(
+    verified.filter((c) => c.claim_type === "education")
+  );
 
   const links: ResumeLink[] = verified
     .filter((c) => c.claim_type === "public_links")
     .map((c) => ({ label: c.value, url: c.source_url }));
 
-  const locationClaim = firstValue(verified, "location");
-  const location =
+  // Some enrichment runs leaked a boolean into the location field ("True").
+  // Skip junk values so a real city (or the directory city) is used instead.
+  const locationClaim = verified.find(
+    (c) =>
+      c.claim_type === "location" &&
+      !JUNK_LOCATIONS.has(c.value.trim().toLowerCase())
+  );
+  const locationRaw =
     locationClaim?.value ??
     (person.city && person.city !== "(unknown)" ? person.city : null);
+  const location = locationRaw ? smartTitle(locationRaw) : null;
 
   const sources = Array.from(
     new Set(verified.map((c) => c.source_url).filter(Boolean))

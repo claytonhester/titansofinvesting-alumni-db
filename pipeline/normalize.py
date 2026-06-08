@@ -27,6 +27,28 @@ _ROMAN_SUFFIXES = frozenset({
     "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
 })
 
+# Tokens that must render fully uppercase even when a source lowercased them.
+# Curated for this finance dataset: credentials, corporate suffixes that are
+# genuinely acronyms (LLC/LP — but NOT Inc./Corp./Ltd./Co., which read as
+# words), C-suite, and recurring orgs that appear lowercased in scraped text.
+# Mirrors web/lib/normalize.ts::ACRONYMS so DB and render agree.
+_ACRONYMS = frozenset({
+    # credentials / degrees
+    "cfa", "caia", "cpa", "cfp", "frm", "mba", "bba", "emba", "llm", "phd",
+    # corporate suffixes that are acronyms
+    "llc", "lp", "llp", "plc", "pllc", "lllp",
+    # C-suite
+    "ceo", "cfo", "coo", "cto", "cio", "cmo", "cro", "evp", "svp",
+    # recurring orgs / finance terms seen lowercased in this data
+    "kkr", "kbre", "trs", "lse", "ccmp", "reit", "etf", "ipo",
+})
+
+
+def _capitalize_word(word: str) -> str:
+    """Capitalize each '&'-separated segment so 'a&m' -> 'A&M', 'r&d' -> 'R&D',
+    while a plain word capitalizes normally ('finance' -> 'Finance')."""
+    return "&".join(seg.capitalize() if seg else seg for seg in word.split("&"))
+
 # Claim types whose values should be title-cased.
 _TITLE_CASE_TYPES = frozenset({
     "current_title",
@@ -76,6 +98,11 @@ def smart_title(value: str) -> str:
 
         word_lower = stripped.lower()
 
+        # Curated acronyms read as uppercase ("llc" -> "LLC", "kbre" -> "KBRE").
+        if word_lower in _ACRONYMS:
+            result.append(prefix + word_lower.upper() + suffix)
+            continue
+
         # Roman-numeral suffixes read as uppercase ("iii" -> "III").
         if word_lower in _ROMAN_SUFFIXES:
             result.append(prefix + word_lower.upper() + suffix)
@@ -85,7 +112,7 @@ def smart_title(value: str) -> str:
         if i > 0 and word_lower in _MINOR:
             result.append(prefix + word_lower + suffix)
         else:
-            result.append(prefix + word_lower.capitalize() + suffix)
+            result.append(prefix + _capitalize_word(word_lower) + suffix)
 
     return " ".join(result)
 
@@ -118,6 +145,20 @@ def _confidence(claim: ClaimRow) -> float:
     return claim.confidence if claim.confidence is not None else 0.0
 
 
+# Values that are never a legitimate claim — booleans/placeholders the LLM
+# extractor occasionally emits (e.g. it once returned "True" for `location`).
+# Rejected at ingest so junk never reaches the DB, for every source.
+_JUNK_VALUES = frozenset({
+    "true", "false", "yes", "no", "none", "null", "n/a", "na",
+    "unknown", "n.a.", "tbd", "-", "—",
+})
+
+
+def is_junk_value(value: str) -> bool:
+    """True when a claim value is a placeholder/boolean rather than real data."""
+    return value.strip().lower() in _JUNK_VALUES
+
+
 def digest_claims(claims: list[ClaimRow]) -> list[ClaimRow]:
     """Normalize and deduplicate a merged claim set before persisting.
 
@@ -130,8 +171,13 @@ def digest_claims(claims: list[ClaimRow]) -> list[ClaimRow]:
 
     news_mention claims are intentionally excluded from deduplication
     because multiple articles about the same person are all valid.
+
+    Junk values (booleans/placeholders like "True", "N/A") are dropped first,
+    so no source can write a non-fact into the DB.
     """
-    normalized = [normalize_claim(c) for c in claims]
+    normalized = [
+        normalize_claim(c) for c in claims if not is_junk_value(c.value)
+    ]
 
     seen: dict[tuple[str, str], ClaimRow] = {}
     news: list[ClaimRow] = []

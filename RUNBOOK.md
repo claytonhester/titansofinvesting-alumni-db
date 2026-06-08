@@ -82,6 +82,45 @@ Run once. Re-running is safe (idempotent).
 
 ---
 
+### Start fresh (wipe collected data and re-ingest clean)
+
+Two ways to reset, depending on how much you want to keep:
+
+```bash
+# A. Nuke EVERYTHING and rebuild from the directory (people + all enrichment).
+rm pipeline/data/titans.db
+python cli.py ingest                    # rebuilds the people table, clean by construction
+python phase2_enrich.py --limit 50      # collect a fresh batch
+
+# B. Keep the people list, wipe ONLY the enrichment (claims/status/sources).
+sqlite3 pipeline/data/titans.db "DELETE FROM claims; DELETE FROM batch_status; DELETE FROM identity_candidates; DELETE FROM person_sources;"
+python phase2_enrich.py --limit 50
+```
+
+Then `cd web && npm run sync-db` to push the new data to the site.
+
+> You do **not** need `clean_data.py` or `renormalize_claims.py` for a fresh
+> ingest — those are one-time/legacy backfill tools. Cleaning is built into the
+> ingest itself (see next note).
+
+### How data is cleaned (automatic — no manual step)
+
+Every claim, from every source, passes through one gate (`normalize.digest_claims`)
+right before it's written, which:
+- **Title-cases** professional values ("kbre" → "KBRE", "texas a&m" → "Texas A&M").
+- **Drops junk** values (a boolean/placeholder like "True" or "N/A" never gets stored).
+- **De-duplicates** exact case-insensitive repeats from overlapping sources.
+
+The web app then does a second cleaning pass at render time (`web/lib/`): it
+re-title-cases everything, **merges duplicate jobs** (a dated role + its dateless
+prose twin collapse into one; multiple roles at one employer stack under that
+company), **groups education** (one card per school, degrees listed once), and
+hides any junk that slipped through. So a person with zero prior data comes in,
+gets cleaned on write, and is sorted + de-duplicated on display — start to finish,
+no hand-fixing.
+
+---
+
 ### Phase 2 — Enrich alumni profiles
 
 Searches the web, scrapes sources, runs Claude extraction, and writes structured claims per person.
@@ -187,7 +226,13 @@ npm run build      # production build check
 npm start          # production, port 3210
 ```
 
-The web app reads `pipeline/data/titans.db` directly. No migration needed — the pipeline creates the schema on first run.
+**The web app reads its own bundled copy of the DB at `web/data/titans.db`, NOT the pipeline's.** This is so the site can deploy to Vercel (where `pipeline/` isn't in the build). `npm run dev` and `npm run build` run `sync-db` automatically (via `predev` / `prebuild`), copying the latest `pipeline/data/titans.db` → `web/data/titans.db`.
+
+**After any enrichment run, refresh the site's data with:**
+```bash
+cd web && npm run sync-db      # copies pipeline DB -> web/data/titans.db
+```
+Then commit `web/data/titans.db` and redeploy if you're on Vercel. If the site looks stale after enriching, this is almost always the missing step.
 
 ---
 
