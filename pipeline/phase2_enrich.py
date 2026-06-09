@@ -119,13 +119,36 @@ class Person:
 
 
 def _load_targets(
-    conn: sqlite3.Connection, limit: int, name: str | None
+    conn: sqlite3.Connection,
+    limit: int,
+    name: str | None,
+    titan_class: int | None = None,
+    school: str | None = None,
 ) -> list[Person]:
     if name:
         rows = conn.execute(
             "SELECT id, full_name, initial_company, city, school, titan_class "
             "FROM people WHERE full_name = ?",
             (name,),
+        ).fetchall()
+    elif titan_class is not None:
+        # Target an un-enriched cohort by class (optionally one school) — used to
+        # run a representative batch (e.g. A&M class 3) rather than arbitrary
+        # pending rows. Resumable: already-done people are excluded.
+        clauses = ["p.titan_class = ?"]
+        params: list[object] = [titan_class]
+        if school:
+            clauses.append("p.school = ?")
+            params.append(school)
+        params.append(limit)
+        rows = conn.execute(
+            "SELECT p.id, p.full_name, p.initial_company, p.city, p.school, "
+            "p.titan_class FROM people p WHERE "
+            + " AND ".join(clauses)
+            + " AND NOT EXISTS (SELECT 1 FROM batch_status b WHERE "
+            "b.person_id = p.id AND b.phase = 'structuring' AND b.status = 'done') "
+            "ORDER BY p.id LIMIT ?",
+            params,
         ).fetchall()
     else:
         ids = pending_people(conn, PHASE_STRUCTURING, limit)
@@ -433,7 +456,10 @@ def enrich_person(
             years_experience=pdl_attrs.years_experience,
             linkedin_connections=pdl_attrs.linkedin_connections,
             tenure_years=tenure_years(pdl_attrs.current_role_start_year, ref_year),
-            years_to_md=years_to_md(clean_rows, gy.year),
+            # Keep years_to_md consistent with the reached_md KPI: a velocity
+            # figure is only meaningful when we actually credit the MD milestone.
+            # (A career title may read "MD" while the classifier declines it.)
+            years_to_md=years_to_md(clean_rows, gy.year) if flags.reached_md else None,
             num_employers=num_employers(clean_rows),
             has_advanced_degree=has_advanced_degree(edu_texts),
             current_sector=classify_sector(current_employer_val),
@@ -512,7 +538,12 @@ def enrich_person(
     )
 
 
-def run(limit: int, name: str | None) -> int:
+def run(
+    limit: int,
+    name: str | None,
+    titan_class: int | None = None,
+    school: str | None = None,
+) -> int:
     firecrawl = Firecrawl(api_key=require_key("FIRECRAWL_API_KEY"))
     anthropic = Anthropic(api_key=require_key("ANTHROPIC_API_KEY"))
 
@@ -527,7 +558,7 @@ def run(limit: int, name: str | None) -> int:
         init_enrichment_schema(conn)
         init_person_insights_schema(conn)
         init_news_schema(conn)
-        people = _load_targets(conn, limit, name)
+        people = _load_targets(conn, limit, name, titan_class, school)
         if not people:
             print("Nothing to enrich (all targets done or none matched).", file=sys.stderr)
             return 1
@@ -577,8 +608,12 @@ def run(limit: int, name: str | None) -> int:
                     print(f"  ERROR: {exc}", file=sys.stderr)
 
     credits_after = remaining_credits(firecrawl)
+    batch_label = name or (
+        f"{school or 'class'}-{titan_class}" if titan_class is not None
+        else f"enrich-{processed}"
+    )
     entry = build_entry(
-        label=name or f"enrich-{processed}",
+        label=batch_label,
         people=processed,
         haiku_in=haiku_in,
         haiku_out=haiku_out,
@@ -609,12 +644,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="phase2-enrich", description=__doc__)
     p.add_argument("--limit", type=int, default=5, help="How many un-enriched alumni to process")
     p.add_argument("--name", default=None, help="Enrich one specific person by full name")
+    p.add_argument("--class", dest="titan_class", type=int, default=None,
+                   help="Target an un-enriched cohort by Titan class number")
+    p.add_argument("--school", default=None,
+                   help="Restrict --class to one school (e.g. 'Texas A&M')")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return run(limit=args.limit, name=args.name)
+    return run(limit=args.limit, name=args.name,
+               titan_class=args.titan_class, school=args.school)
 
 
 if __name__ == "__main__":

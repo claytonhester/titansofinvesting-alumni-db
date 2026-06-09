@@ -241,16 +241,16 @@ def _extract_attributes(data: dict) -> PdlAttributes:
     levels = data.get("job_title_levels")
     seniority = ", ".join(_clean(x) for x in levels if _clean(x)) if isinstance(levels, list) else ""
     start_year = _year(data.get("job_start_date"))
-    years_exp = _as_int(data.get("inferred_years_experience"))
-    connections = _as_int(data.get("linkedin_connections"))
     return PdlAttributes(
         current_industry=_clean(data.get("job_company_industry")) or _clean(data.get("industry")),
         current_company_size=_clean(data.get("job_company_size")),
         job_function=_clean(data.get("job_title_role")),
         pdl_seniority=seniority,
         current_role_start_year=int(start_year) if start_year else None,
-        years_experience=years_exp or None,
-        linkedin_connections=connections or None,
+        # _opt_int keeps a real 0 as 0; only missing/invalid becomes None, so a
+        # legitimate "0 years" / "0 connections" isn't silently lost.
+        years_experience=_opt_int(data.get("inferred_years_experience")),
+        linkedin_connections=_opt_int(data.get("linkedin_connections")),
     )
 
 
@@ -347,6 +347,17 @@ def _as_int(value: object) -> int:
         return int(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return 0
+
+
+def _opt_int(value: object) -> int | None:
+    """Like _as_int but preserves a real 0 and returns None (not 0) when the
+    value is missing or unparseable — so a legitimate zero isn't lost."""
+    if value is None:
+        return None
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _year(value: object) -> str:

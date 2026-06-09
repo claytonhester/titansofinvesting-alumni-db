@@ -43,6 +43,33 @@ def test_parse_multiple_at_keeps_last_as_company():
     assert e.company == "Work"  # split on last ' at '
 
 
+def test_parse_comma_format_from_reconciler():
+    """The reconciler emits 'Title, Company (years)' — comma-separated, no ' at '."""
+    e = parse_career_entry("Director of Investments, Texas A&M Foundation (2020-2025)")
+    assert e.title == "Director of Investments"
+    assert e.company == "Texas A&M Foundation"
+    assert e.start_year == 2020 and e.end_year == 2025
+
+
+def test_parse_comma_suffix_guard_is_company_only():
+    """A comma before a corporate suffix is inside the company name, not a
+    title/company separator."""
+    e = parse_career_entry("Heritage Asset Advisors Ltd., LLP (2010-present)")
+    assert e.title == ""
+    assert e.company == "Heritage Asset Advisors Ltd., LLP"
+    assert e.start_year == 2010 and e.end_year is None
+
+
+def test_parse_company_from_quote_when_value_has_no_separator():
+    """A bare title with no ' at '/comma falls back to the quote's '@ COMPANY'."""
+    e = parse_career_entry(
+        "Director of Investments",
+        "2020 - 2025 Director of Investments @ texas a&m foundation",
+    )
+    assert e.company == "texas a&m foundation"
+    assert e.start_year == 2020 and e.end_year == 2025
+
+
 def test_first_post_grad_skips_pre_grad_internship():
     claims = [
         _career("Intern at BigBank (2013-2014)"),
