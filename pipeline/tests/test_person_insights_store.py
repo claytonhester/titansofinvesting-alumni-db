@@ -28,7 +28,8 @@ def _insight(pid=1, **kw):
     base = dict(
         person_id=pid, grad_year=2014, grad_year_source="class-map",
         first_employer="Goldman", on_buy_side=True, reached_md=True,
-        founder_partner=False, still_first_firm=False, model="haiku",
+        founder_partner=False, still_first_firm=False, started_sell_side=True,
+        model="haiku",
     )
     base.update(kw)
     return PersonInsight(**base)
@@ -42,6 +43,7 @@ def test_upsert_and_read_roundtrip(conn):
     assert got.first_employer == "Goldman"
     assert got.on_buy_side is True and got.reached_md is True
     assert got.founder_partner is False and got.still_first_firm is False
+    assert got.started_sell_side is True
 
 
 def test_upsert_is_idempotent_on_person(conn):

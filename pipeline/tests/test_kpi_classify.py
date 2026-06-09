@@ -35,6 +35,14 @@ def test_deterministic_founder_partner():
     assert f.founder_partner is True
 
 
+def test_deterministic_started_sell_side():
+    claims = [_c("current_title", "Portfolio Manager"),
+              _c("current_employer", "Veritas Fund")]
+    assert deterministic_flags(claims, first_employer="Goldman Sachs").started_sell_side is True
+    assert deterministic_flags(claims, first_employer="McKinsey & Company").started_sell_side is True
+    assert deterministic_flags(claims, first_employer="Teacher Retirement System").started_sell_side is False
+
+
 def test_deterministic_still_first_firm_normalized():
     claims = [
         _c("current_title", "Partner"),
@@ -100,7 +108,8 @@ def test_classify_client_success_overrides_fallback():
     claims = [_c("current_title", "Analyst"), _c("current_employer", "TRS")]
     client = _make_client(
         '{"on_buy_side": true, "reached_md": true, '
-        '"founder_partner": false, "still_first_firm": false}'
+        '"founder_partner": false, "still_first_firm": false, '
+        '"started_sell_side": false}'
     )
     flags, ti, to = classify_kpis(client, "Jane", 2010, "TRS", claims)
     assert flags.reached_md is True  # model overrode the deterministic False

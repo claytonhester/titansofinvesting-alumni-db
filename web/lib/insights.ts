@@ -1,6 +1,6 @@
 import {
   topFirms,
-  geoSpread,
+  currentGeoSpread,
   schoolBreakdown,
   sectorBreakdown,
   latestInsightsSnapshot,
@@ -88,7 +88,7 @@ export function getAlumniInsights(): AlumniInsights {
 
   return {
     startFirms: topFirms(8),
-    geoSpread: geoSpread(8),
+    geoSpread: currentGeoSpread(8),
     schoolSpread,
     measuredSectors,
     total,

@@ -39,6 +39,13 @@ def count_flag(insights: Sequence[PersonInsight], attr: str) -> int:
     return sum(1 for p in insights if getattr(p, attr))
 
 
+def transitioned_count(insights: Sequence[PersonInsight]) -> int:
+    """People who made the classic move: started in banking/consulting/accounting
+    AND are on the buy-side now. The measured form of "moved from a bank or
+    consultancy into investing"."""
+    return sum(1 for p in insights if p.started_sell_side and p.on_buy_side)
+
+
 def reached_md_stats(
     insights: Sequence[PersonInsight],
     snapshot_year: int,
@@ -78,13 +85,19 @@ def kpi_signature_stats(
     buy = count_flag(insights, "on_buy_side")
     founders = count_flag(insights, "founder_partner")
     still = count_flag(insights, "still_first_firm")
+    moved = transitioned_count(insights)
     md_num, md_den, md_pct = reached_md_stats(insights, snapshot_year, md_years=md_years)
 
+    buy_detail = (
+        f"{moved} moved in from banking or consulting"
+        if moved
+        else "moved into an investing seat"
+    )
     return (
         SignatureStat(
             label="Now on the buy-side",
             value=f"{_pct(buy, classified)}%",
-            detail="moved into an investing seat",
+            detail=buy_detail,
             pct=_pct(buy, classified),
         ),
         SignatureStat(

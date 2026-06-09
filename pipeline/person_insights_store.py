@@ -31,11 +31,12 @@ CREATE TABLE IF NOT EXISTS person_insights (
     grad_year        INTEGER,
     grad_year_source TEXT    NOT NULL DEFAULT '',
     first_employer   TEXT    NOT NULL DEFAULT '',
-    on_buy_side      INTEGER NOT NULL DEFAULT 0,
-    reached_md       INTEGER NOT NULL DEFAULT 0,
-    founder_partner  INTEGER NOT NULL DEFAULT 0,
-    still_first_firm INTEGER NOT NULL DEFAULT 0,
-    model            TEXT    NOT NULL DEFAULT '',
+    on_buy_side       INTEGER NOT NULL DEFAULT 0,
+    reached_md        INTEGER NOT NULL DEFAULT 0,
+    founder_partner   INTEGER NOT NULL DEFAULT 0,
+    still_first_firm  INTEGER NOT NULL DEFAULT 0,
+    started_sell_side INTEGER NOT NULL DEFAULT 0,
+    model             TEXT    NOT NULL DEFAULT '',
     classified_at    TEXT    NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (person_id) REFERENCES people (id)
 );
@@ -52,6 +53,7 @@ class PersonInsight:
     reached_md: bool
     founder_partner: bool
     still_first_firm: bool
+    started_sell_side: bool = False
     model: str = ""
 
 
@@ -66,21 +68,22 @@ def upsert_person_insight(conn: sqlite3.Connection, row: PersonInsight) -> None:
         """
         INSERT INTO person_insights (
             person_id, grad_year, grad_year_source, first_employer,
-            on_buy_side, reached_md, founder_partner, still_first_firm, model,
-            classified_at
+            on_buy_side, reached_md, founder_partner, still_first_firm,
+            started_sell_side, model, classified_at
         ) VALUES (
-            :pid, :gy, :gys, :fe, :bs, :md, :fp, :sff, :model, datetime('now')
+            :pid, :gy, :gys, :fe, :bs, :md, :fp, :sff, :sss, :model, datetime('now')
         )
         ON CONFLICT (person_id) DO UPDATE SET
-            grad_year        = excluded.grad_year,
-            grad_year_source = excluded.grad_year_source,
-            first_employer   = excluded.first_employer,
-            on_buy_side      = excluded.on_buy_side,
-            reached_md       = excluded.reached_md,
-            founder_partner  = excluded.founder_partner,
-            still_first_firm = excluded.still_first_firm,
-            model            = excluded.model,
-            classified_at    = datetime('now')
+            grad_year         = excluded.grad_year,
+            grad_year_source  = excluded.grad_year_source,
+            first_employer    = excluded.first_employer,
+            on_buy_side       = excluded.on_buy_side,
+            reached_md        = excluded.reached_md,
+            founder_partner   = excluded.founder_partner,
+            still_first_firm  = excluded.still_first_firm,
+            started_sell_side = excluded.started_sell_side,
+            model             = excluded.model,
+            classified_at     = datetime('now')
         """,
         {
             "pid": row.person_id,
@@ -91,6 +94,7 @@ def upsert_person_insight(conn: sqlite3.Connection, row: PersonInsight) -> None:
             "md": 1 if row.reached_md else 0,
             "fp": 1 if row.founder_partner else 0,
             "sff": 1 if row.still_first_firm else 0,
+            "sss": 1 if row.started_sell_side else 0,
             "model": row.model,
         },
     )
@@ -106,6 +110,7 @@ def _to_insight(row: sqlite3.Row) -> PersonInsight:
         reached_md=bool(row["reached_md"]),
         founder_partner=bool(row["founder_partner"]),
         still_first_firm=bool(row["still_first_firm"]),
+        started_sell_side=bool(row["started_sell_side"]),
         model=row["model"],
     )
 
