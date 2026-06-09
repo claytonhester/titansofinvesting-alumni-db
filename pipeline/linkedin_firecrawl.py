@@ -36,11 +36,15 @@ EXTRACTION_METHOD = "firecrawl-linkedin"
 # lookup (namesake risk), so it sits just under a verified PDL likelihood match.
 LINKEDIN_CONFIDENCE = 0.8
 
-# The agent is BILLED and variable (observed 45–324 credits/call), so cap each run
-# and only fire it when the profile is still thin. A rich profile would just get a
-# duplicate of what PDL already gave.
-DEFAULT_MAX_CREDITS = 60
+# The agent is BILLED and variable. Firecrawl does NOT reliably honor this per-call
+# cap (a call capped at 60 was observed spending 324), so it's best-effort only —
+# the real protection is the pre-flight LinkedInBudget below.
+DEFAULT_MAX_CREDITS = 40
 LINKEDIN_MIN_CAREER = 3
+# Per-person allowance for the run-level agent budget. The agent only pays off on a
+# minority of thin profiles, so a batch budget well under (cost-per-firing × N)
+# caps total spend; the minimum still lets a single-person run fire once.
+AGENT_CREDITS_PER_PERSON = 15
 
 
 def profile_needs_linkedin(claims, *, min_career: int = LINKEDIN_MIN_CAREER) -> bool:
@@ -52,6 +56,53 @@ def profile_needs_linkedin(claims, *, min_career: int = LINKEDIN_MIN_CAREER) -> 
     has_employer = any(c.claim_type == "current_employer" for c in claims)
     has_education = any(c.claim_type == "education" for c in claims)
     return (not has_employer) or (not has_education) or (career < min_career)
+
+
+@dataclass(frozen=True)
+class LinkedInDecision:
+    """Whether to fire the billed agent for one person, and why (for the log)."""
+    fire: bool
+    reason: str
+
+
+def agent_batch_budget(
+    n_people: int,
+    *,
+    per_person: int = AGENT_CREDITS_PER_PERSON,
+    minimum: int | None = None,
+) -> int:
+    """Total LinkedIn-agent credits a batch may spend. Scales with size but never
+    below one full firing, so a single-person run isn't starved."""
+    floor = DEFAULT_MAX_CREDITS + 20 if minimum is None else minimum
+    return max(floor, per_person * max(0, n_people))
+
+
+class LinkedInBudget:
+    """Run-level hard ceiling on LinkedIn-agent spend. Because Firecrawl ignores
+    the per-call cap, the only dependable control is pre-flight: stop firing once
+    the batch budget is spent. One in-flight call can still overshoot by up to its
+    own cost, so the effective worst case is (budget + one capped call).
+
+    Mutable on purpose — it threads through the per-person loop accumulating spend.
+    The skip gate also enforces a minimum verified-web-presence bar: firing the
+    name-based agent on a person with ZERO identity-verified sources almost always
+    burns credits for nothing (no public footprint to find)."""
+
+    def __init__(self, total_credits: int, *, min_verified_sources: int = 1) -> None:
+        self.remaining = max(0, total_credits)
+        self.min_verified_sources = min_verified_sources
+
+    def decide(self, claims, trusted_count: int) -> LinkedInDecision:
+        if not profile_needs_linkedin(claims):
+            return LinkedInDecision(False, "profile already complete")
+        if trusted_count < self.min_verified_sources:
+            return LinkedInDecision(False, "no verified web presence")
+        if self.remaining <= 0:
+            return LinkedInDecision(False, "batch LinkedIn budget spent")
+        return LinkedInDecision(True, "thin profile with web presence")
+
+    def charge(self, credits: int) -> None:
+        self.remaining = max(0, self.remaining - (credits or 0))
 
 # JSON schema constraining the agent's output to a structured profile.
 _SCHEMA = {

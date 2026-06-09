@@ -39,7 +39,11 @@ from news_enrich import NewsEnrichResult, extract_news_mentions
 from discovery import DiscoveryResult, NewsDiscoveryResult, Source, _domain, discover, discover_news
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
 from normalize import digest_claims
-from linkedin_firecrawl import fetch_linkedin, profile_needs_linkedin
+from linkedin_firecrawl import (
+    LinkedInBudget,
+    agent_batch_budget,
+    fetch_linkedin,
+)
 from pdl_enrich import PdlAttributes, enrich_pdl
 from pdl_verify import verify_pdl_claims
 from reconcile import reconcile_claims
@@ -250,10 +254,16 @@ def enrich_person(
     http: httpx.Client,
     pdl_key: str | None,
     perplexity_key: str | None = None,
+    *,
+    li_budget: LinkedInBudget | None = None,
 ) -> _PersonUsage:
     """Run the full pipeline for one person and persist every stage. Records
     batch_status per phase so a crash mid-batch resumes cleanly. Returns the
     person's usage so the caller can fold it into the run-level cost log."""
+    # A standalone call (no batch) gets a fresh single-person agent budget so the
+    # LinkedIn gate still works; run() passes a shared budget across the batch.
+    if li_budget is None:
+        li_budget = LinkedInBudget(agent_batch_budget(1))
     # Firecrawl is the deepest career source but it is billed and can run dry.
     # Treat a 0-credit state as a graceful skip, NOT a fatal abort: PDL +
     # Perplexity remain a working spine, so the batch keeps producing profiles
@@ -323,16 +333,19 @@ def enrich_person(
 
     # Firecrawl agent-mode LinkedIn — a CORE source, but GAP-FILLING, not blanket.
     # Plain scrape is auth-walled out of LinkedIn; the agent reads the public
-    # profile. The agent is billed and variable (observed 45–324 credits/call), so
-    # it fires ONLY when Firecrawl-scrape + PDL left the profile thin (missing
-    # current employer, no education, or < 3 roles). A profile PDL already filled
-    # would just get a duplicate, so we skip it and save the credits. When it does
-    # run, the reconciler merges it with PDL + scrape and records all contributors.
+    # profile. The agent is billed and variable (observed 45–324 credits/call) and
+    # the single biggest line item in a run, so it's triple-gated by LinkedInBudget:
+    #   1. profile must be thin (PDL already-rich profiles would just get a dup),
+    #   2. the person must have >=1 identity-verified source (firing the name-based
+    #      agent on someone with no web footprint almost always finds nothing), and
+    #   3. the batch must have agent budget left (hard cap; Firecrawl ignores the
+    #      per-call max_credits, so this pre-flight check is the real protection).
+    # When it does run, the reconciler merges it with PDL + scrape.
     li_credits = 0
     n_li = 0
-    li_skipped = not profile_needs_linkedin(claim_rows)
-    if li_skipped:
-        print("  Firecrawl LinkedIn: profile already complete — skipped (saved credits)")
+    decision = li_budget.decide(claim_rows, len(trusted))
+    if not decision.fire:
+        print(f"  Firecrawl LinkedIn: skipped ({decision.reason})")
     else:
         try:
             li = fetch_linkedin(
@@ -340,6 +353,7 @@ def enrich_person(
                 employer=_verified_employer or person.company, city=person.city,
             )
             li_credits = li.credits_used
+            li_budget.charge(li_credits)
             n_li = len(li.claim_rows)
             if li.claim_rows:
                 claim_rows.extend(li.claim_rows)
@@ -565,6 +579,11 @@ def run(
 
         # Authoritative Firecrawl cost: snapshot the live meter around the batch.
         credits_before = remaining_credits(firecrawl)
+        # Hard run-level ceiling on the (unpredictable, sometimes-spiking) LinkedIn
+        # agent — the single biggest credit line item. Shared across the batch so
+        # spend is bounded regardless of how many profiles come back thin.
+        li_budget = LinkedInBudget(agent_batch_budget(len(people)))
+        print(f"LinkedIn agent budget for this run: {li_budget.remaining} credits")
         est_credits = 0
         haiku_in = haiku_out = sonnet_in = sonnet_out = 0
         pdl_matches = 0
@@ -577,6 +596,7 @@ def run(
                 try:
                     usage = enrich_person(
                         conn, firecrawl, anthropic, person, http, pdl_key, perplexity_key,
+                        li_budget=li_budget,
                     )
                     conn.commit()  # persist each person before moving on (resumable)
                     est_credits += usage.credits + usage.fc_news_credits
