@@ -90,6 +90,12 @@ class SignatureStat:
 
 
 @dataclass(frozen=True)
+class SectorCount:
+    sector: str
+    count: int
+
+
+@dataclass(frozen=True)
 class InsightsSnapshot:
     """The full per-year roll-up. The deterministic fields are measured by SQL;
     `narrative` is the only model-written field. `is_sample` is computed from
@@ -105,6 +111,7 @@ class InsightsSnapshot:
     current_titles: tuple[TitleCount, ...] = ()
     seniority: tuple[SeniorityTier, ...] = ()
     signature_stats: tuple[SignatureStat, ...] = ()
+    landing_sectors: tuple[SectorCount, ...] = ()
     founders_partners: int = 0
     haiku_tokens_in: int = 0
     haiku_tokens_out: int = 0
@@ -136,6 +143,9 @@ def _payload_dict(snap: InsightsSnapshot) -> dict:
         "signature_stats": [
             {"label": s.label, "value": s.value, "detail": s.detail, "pct": s.pct}
             for s in snap.signature_stats
+        ],
+        "landing_sectors": [
+            {"sector": s.sector, "count": s.count} for s in snap.landing_sectors
         ],
         "founders_partners": snap.founders_partners,
     }
@@ -206,6 +216,10 @@ def latest_snapshot(conn: sqlite3.Connection) -> InsightsSnapshot | None:
         signature_stats=tuple(
             SignatureStat(s["label"], s["value"], s["detail"], s["pct"])
             for s in payload.get("signature_stats", [])
+        ),
+        landing_sectors=tuple(
+            SectorCount(s["sector"], s["count"])
+            for s in payload.get("landing_sectors", [])
         ),
         founders_partners=payload.get("founders_partners", 0),
         haiku_tokens_in=row["haiku_tokens_in"],

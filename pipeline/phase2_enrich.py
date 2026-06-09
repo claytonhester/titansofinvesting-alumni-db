@@ -26,6 +26,7 @@ import os
 import sqlite3
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import httpx
 from anthropic import Anthropic
@@ -39,12 +40,19 @@ from discovery import DiscoveryResult, NewsDiscoveryResult, Source, _domain, dis
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
 from normalize import digest_claims
 from linkedin_firecrawl import fetch_linkedin, profile_needs_linkedin
-from pdl_enrich import enrich_pdl
+from pdl_enrich import PdlAttributes, enrich_pdl
 from pdl_verify import verify_pdl_claims
 from reconcile import reconcile_claims
-from career_analysis import first_post_grad_employer
+from career_analysis import (
+    first_post_grad_employer,
+    num_employers,
+    tenure_years,
+    years_to_md,
+)
 from grad_year import derive_grad_year
 from kpi_classify import MODEL_METHOD as KPI_METHOD, classify_kpis
+from profile_metrics import has_advanced_degree, left_texas
+from sector_classify import classify_sector
 from person_insights_store import (
     PersonInsight,
     init_person_insights_schema,
@@ -392,6 +400,17 @@ def enrich_person(
     flags, kpi_in, kpi_out = classify_kpis(
         anthropic, person.full_name, gy.year, first_employer, clean_rows
     )
+
+    # Collected PDL attributes (already paid for) + derived metrics. PDL attrs are
+    # present only on a confident match; everything degrades to empty/None.
+    pdl_attrs = pdl.attributes if pdl is not None else PdlAttributes()
+    ref_year = datetime.now(timezone.utc).year
+    current_employer_val = next(
+        (c.value for c in clean_rows if c.claim_type == "current_employer"), ""
+    )
+    current_location_val = next(
+        (c.value for c in clean_rows if c.claim_type == "location"), ""
+    )
     upsert_person_insight(
         conn,
         PersonInsight(
@@ -404,6 +423,19 @@ def enrich_person(
             founder_partner=flags.founder_partner,
             still_first_firm=flags.still_first_firm,
             started_sell_side=flags.started_sell_side,
+            current_industry=pdl_attrs.current_industry,
+            current_company_size=pdl_attrs.current_company_size,
+            job_function=pdl_attrs.job_function,
+            pdl_seniority=pdl_attrs.pdl_seniority,
+            current_role_start_year=pdl_attrs.current_role_start_year,
+            years_experience=pdl_attrs.years_experience,
+            linkedin_connections=pdl_attrs.linkedin_connections,
+            tenure_years=tenure_years(pdl_attrs.current_role_start_year, ref_year),
+            years_to_md=years_to_md(clean_rows, gy.year),
+            num_employers=num_employers(clean_rows),
+            has_advanced_degree=has_advanced_degree(edu_texts),
+            current_sector=classify_sector(current_employer_val),
+            left_texas=left_texas(current_location_val),
             model=KPI_METHOD,
         ),
     )

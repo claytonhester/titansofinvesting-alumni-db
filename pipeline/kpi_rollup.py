@@ -24,7 +24,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import replace
 
-from insights_store import InsightsSnapshot, SignatureStat
+from collections import Counter
+
+from insights_store import InsightsSnapshot, SectorCount, SignatureStat
 from person_insights_store import PersonInsight
 
 MD_FAIR_SHOT_YEARS = 10
@@ -32,6 +34,43 @@ MD_FAIR_SHOT_YEARS = 10
 
 def _pct(part: int, whole: int) -> int:
     return round(100 * part / whole) if whole else 0
+
+
+def _avg(values: Sequence[int]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def advanced_degree_rate(insights: Sequence[PersonInsight]) -> int:
+    return _pct(count_flag(insights, "has_advanced_degree"), len(insights))
+
+
+def avg_tenure(insights: Sequence[PersonInsight]) -> float | None:
+    return _avg([p.tenure_years for p in insights if p.tenure_years is not None])
+
+
+def avg_years_to_md(insights: Sequence[PersonInsight]) -> float | None:
+    return _avg([p.years_to_md for p in insights if p.years_to_md is not None])
+
+
+def left_texas_rate(insights: Sequence[PersonInsight]) -> tuple[int, int]:
+    """(pct who left Texas, n with a known current location). The denominator is
+    only people whose current location we actually know."""
+    known = [p for p in insights if p.left_texas is not None]
+    left = sum(1 for p in known if p.left_texas)
+    return _pct(left, len(known)), len(known)
+
+
+def landing_sectors(insights: Sequence[PersonInsight]) -> tuple[SectorCount, ...]:
+    """Sector breakdown of CURRENT employers (where they land), most common first.
+    Blank sectors are skipped so unenriched rows don't pollute the chart."""
+    tally: Counter = Counter()
+    for p in insights:
+        if p.current_sector:
+            tally[p.current_sector] += 1
+    return tuple(
+        SectorCount(sector=s, count=n)
+        for s, n in sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))
+    )
 
 
 def count_flag(insights: Sequence[PersonInsight], attr: str) -> int:
@@ -118,7 +157,51 @@ def kpi_signature_stats(
             detail="stayed and climbed where they started",
             pct=_pct(still, classified),
         ),
-    )
+    ) + _secondary_stats(insights)
+
+
+def _secondary_stats(insights: Sequence[PersonInsight]) -> tuple[SignatureStat, ...]:
+    """The folded-in cohort stats that share the scorecard with the 4 KPIs.
+    Average tiles carry pct=0 (the view hides the bar); rate tiles carry their %.
+    A tile is omitted when its underlying data is entirely missing."""
+    out: list[SignatureStat] = []
+
+    deg = advanced_degree_rate(insights)
+    out.append(SignatureStat(
+        label="Earned a graduate degree",
+        value=f"{deg}%",
+        detail="went back for an MBA, JD, or other advanced degree",
+        pct=deg,
+    ))
+
+    ytm = avg_years_to_md(insights)
+    if ytm is not None:
+        out.append(SignatureStat(
+            label="Avg years to MD",
+            value=f"{ytm:.0f} yrs",
+            detail="from graduation to Managing Director or above",
+            pct=0,
+        ))
+
+    ten = avg_tenure(insights)
+    if ten is not None:
+        out.append(SignatureStat(
+            label="Avg tenure, current firm",
+            value=f"{ten:.0f} yrs",
+            detail="years in their current role",
+            pct=0,
+        ))
+
+    left_pct, known = left_texas_rate(insights)
+    if known:
+        out.append(SignatureStat(
+            label="Left Texas",
+            value=f"{left_pct}%",
+            detail="live outside Texas now",
+            pct=left_pct,
+        ))
+
+    return tuple(out)
 
 
 def with_kpi_stats(
@@ -134,4 +217,9 @@ def with_kpi_stats(
     yet the tiles are emptied so the web renders an empty state instead of zeros."""
     stats = kpi_signature_stats(insights, snapshot_year=snapshot_year, md_years=md_years)
     founders = count_flag(insights, "founder_partner") if insights else snap.founders_partners
-    return replace(snap, signature_stats=stats, founders_partners=founders)
+    return replace(
+        snap,
+        signature_stats=stats,
+        founders_partners=founders,
+        landing_sectors=landing_sectors(insights),
+    )
