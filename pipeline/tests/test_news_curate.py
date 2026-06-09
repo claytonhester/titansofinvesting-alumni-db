@@ -75,3 +75,50 @@ def test_client_error_falls_back_per_article():
     curated, ti, to = curate_news(client, "Jane", "Acme", mentions)
     assert ti == 0 and to == 0
     assert curated[0].category == "Company News" and curated[0].summary == "snip"
+
+
+# --- news_items: pull press-worthy public_links, not just news_mention --------
+
+from news_curate import news_items  # noqa: E402
+
+
+def _link(value, url):
+    return ClaimRow("public_links", value, url, "", 0.8, "perplexity")
+
+
+def test_news_items_includes_press_worthy_public_links():
+    claims = [
+        _link("Podcast: Using ETFs in Model Portfolios", "https://www.etf.com/podcasts/x"),
+        _link("Fixed Income Overview article", "https://www.sageadvisory.com/article/y"),
+    ]
+    assert len(news_items(claims)) == 2
+
+
+def test_news_items_excludes_social_and_directory_links():
+    claims = [
+        _link("LinkedIn", "https://linkedin.com/in/jane"),
+        _link("Twitter", "https://twitter.com/jane"),
+        _link("Komson — Partner", "https://theorg.com/org/sage/jane"),     # directory
+        _link("Advisor profile", "https://app.getwarmer.com/advisors/x"),  # directory
+    ]
+    assert news_items(claims) == []
+
+
+def test_news_items_keeps_news_mention_and_links_together():
+    claims = [
+        _mention("2026-01-02 — Fund Closes"),
+        _link("Interview on markets", "https://www.barrons.com/articles/z"),
+        _link("LinkedIn", "https://linkedin.com/in/jane"),  # dropped
+    ]
+    items = news_items(claims)
+    assert len(items) == 2
+    assert {c.claim_type for c in items} == {"news_mention", "public_links"}
+
+
+def test_curate_promotes_public_link_to_feed():
+    """A press-worthy public_link with no client still yields a curated row."""
+    claims = [_link("Podcast on ETFs", "https://www.etf.com/podcasts/x")]
+    curated, _, _ = curate_news(None, "Jane", "Sage", claims)
+    assert len(curated) == 1
+    assert curated[0].headline == "Podcast on ETFs"
+    assert curated[0].source_host == "etf.com"
