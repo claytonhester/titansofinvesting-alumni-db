@@ -12,19 +12,20 @@ import {
 
 // "Overview & Insights" intelligence layer, built to drive two comparable
 // views — TRAJECTORY (where Titans start → where they land → how senior they
-// get) and SCORECARD (a bento of headline signals). The dataset's unique value
-// is the start→now arc: `initial_company` is populated for every alum (where
-// they START), while enrichment claims (current_employer, current_title) reveal
-// where they LAND and how far they climb.
+// get) and SCORECARD (the four headline KPIs). The dataset's unique value is the
+// start→now arc: `initial_company` is populated for every alum (where they
+// START), while enrichment claims (current_employer, current_title) reveal where
+// they LAND and how far they climb.
 //
-// REAL half — computed live from the fully-populated `people` table:
-//   startFirms (initial_company), geoSpread, schoolSpread, heroStats.
-// ILLUSTRATIVE half — seeded from the planned enrichment corpus, flagged by
-// isSample until a pipeline insights pass produces real rows:
-//   landingFirms (current_employer), seniority ladder, sectors, signatureStats.
+// ALWAYS MEASURED — computed live from the fully-populated `people` roster:
+//   startFirms (initial_company), geoSpread, schoolSpread, measuredSectors.
+// MEASURED WHEN ENRICHED — read from the pipeline's insights_snapshot once any
+// alumnus has been enriched; EMPTY (no mock data) until then so the UI renders
+// honest empty states rather than seeded numbers:
+//   narrative, landingFirms, seniority ladder, currentTitles, signatureStats.
 //
-// Swap-ready: when real enrichment rows exist, replace the SAMPLE_INSIGHTS
-// block with reads of those rows and flip isSample — no caller changes.
+// `hasOutcomeData` is false until the snapshot reports at least one enriched
+// person; the view uses it to switch between empty states and real numbers.
 
 export interface FirmCount {
   company: string;
@@ -49,19 +50,21 @@ export interface SignatureStat {
 }
 
 export interface AlumniInsights {
-  // REAL — computed live from the people table.
+  // ALWAYS MEASURED — computed live from the people roster.
   startFirms: FirmBreakdown[];
   geoSpread: GeoSpread[];
   schoolSpread: SchoolBreakdown[];
   measuredSectors: SectorBreakdown[];
   total: number;
-  // ILLUSTRATIVE — seeded synthesis, flagged by isSample.
+  // MEASURED WHEN ENRICHED — empty until the pipeline writes a snapshot with
+  // at least one enriched person. No mock fallback.
   narrative: string;
   landingFirms: FirmCount[];
   seniority: SeniorityTier[];
   currentTitles: CurrentTitle[];
   signatureStats: SignatureStat[];
-  isSample: boolean;
+  // True once a real snapshot reports enriched alumni; drives empty states.
+  hasOutcomeData: boolean;
 }
 
 // Keep the catch-all in the chart for honesty, but always last so the named
@@ -77,11 +80,11 @@ export function getAlumniInsights(): AlumniInsights {
   const catchAll = allSectors.filter((s) => s.sector === SECTOR_CATCHALL);
   const measuredSectors = [...named, ...catchAll];
 
-  // The illustrative half flips to measured data the moment a real (is_sample=0)
-  // snapshot exists — see latestInsightsSnapshot(). Until then we keep the seeded
-  // SAMPLE_INSIGHTS so the demo never publishes sparse, half-enriched numbers.
+  // Outcome data is real the moment the pipeline has enriched anyone — we do NOT
+  // wait for the is_sample coverage gate, so small test batches are visible. We
+  // simply never invent numbers: no snapshot, or zero enriched, → empty states.
   const snapshot = latestInsightsSnapshot();
-  const real = snapshot && !snapshot.is_sample ? snapshot : null;
+  const hasOutcomeData = !!snapshot && snapshot.enriched_count > 0;
 
   return {
     startFirms: topFirms(8),
@@ -89,78 +92,11 @@ export function getAlumniInsights(): AlumniInsights {
     schoolSpread,
     measuredSectors,
     total,
-    narrative: real ? real.narrative : SAMPLE_INSIGHTS.narrative,
-    landingFirms: real ? real.landing_firms : SAMPLE_INSIGHTS.landingFirms,
-    seniority: real ? real.seniority : SAMPLE_INSIGHTS.seniority,
-    currentTitles: real ? real.current_titles : SAMPLE_INSIGHTS.currentTitles,
-    signatureStats: real ? real.signature_stats : SAMPLE_INSIGHTS.signatureStats,
-    isSample: !real,
+    narrative: hasOutcomeData ? snapshot!.narrative : "",
+    landingFirms: hasOutcomeData ? snapshot!.landing_firms : [],
+    seniority: hasOutcomeData ? snapshot!.seniority : [],
+    currentTitles: hasOutcomeData ? snapshot!.current_titles : [],
+    signatureStats: hasOutcomeData ? snapshot!.signature_stats : [],
+    hasOutcomeData,
   };
 }
-
-// Seeded to be internally consistent with the real corpus (1,056 alumni; top
-// first employers JP Morgan / Bain / PwC; Texas-anchored geography). These
-// values illustrate what the enrichment pass will measure for real.
-const SAMPLE_INSIGHTS: {
-  narrative: string;
-  landingFirms: FirmCount[];
-  seniority: SeniorityTier[];
-  currentTitles: CurrentTitle[];
-  signatureStats: SignatureStat[];
-} = {
-  narrative:
-    "The Titan career follows a clear arc. Most start where the training is hardest — the bulge-bracket banks and brand-name consultancies, JP Morgan, Bain, the Big Four — then convert that pedigree into a move buy-side. From there the cohort compounds: a majority now sit at director level or above, and roughly one in five run their own fund or hold a founder's seat. The gravity is unmistakable — investment management, private capital, and the Texas energy economy that anchors the program.",
-  landingFirms: [
-    { company: "Goldman Sachs", count: 19 },
-    { company: "Blackstone", count: 16 },
-    { company: "Citadel", count: 13 },
-    { company: "Own fund / partnership", count: 12 },
-    { company: "Apollo Global", count: 11 },
-    { company: "EnCap Investments", count: 10 },
-    { company: "Quantum Capital", count: 9 },
-    { company: "Vista Equity Partners", count: 8 },
-  ],
-  seniority: [
-    { tier: "Analyst / Associate", count: 142 },
-    { tier: "VP / Principal", count: 318 },
-    { tier: "Director / Managing Director", count: 271 },
-    { tier: "Partner / Founder", count: 224 },
-    { tier: "C-suite / Owner", count: 101 },
-  ],
-  currentTitles: [
-    { title: "Managing Director", count: 138 },
-    { title: "Partner", count: 96 },
-    { title: "Vice President", count: 89 },
-    { title: "Portfolio Manager", count: 71 },
-    { title: "Principal", count: 64 },
-    { title: "Founder / CEO", count: 58 },
-    { title: "Director", count: 52 },
-    { title: "Associate", count: 41 },
-  ],
-  signatureStats: [
-    {
-      label: "Now on the buy-side",
-      value: "61%",
-      detail: "moved from a bank or consultancy into investing roles",
-      pct: 61,
-    },
-    {
-      label: "Reached MD or above",
-      value: "57%",
-      detail: "director, managing director, partner, or C-suite",
-      pct: 57,
-    },
-    {
-      label: "Founders & partners",
-      value: "224",
-      detail: "running their own fund or holding a partner seat",
-      pct: 21,
-    },
-    {
-      label: "Still at their first firm",
-      value: "9%",
-      detail: "stayed and climbed where they started",
-      pct: 9,
-    },
-  ],
-};

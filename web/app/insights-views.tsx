@@ -27,7 +27,7 @@ interface SectorBar {
 
 interface InsightsViewsProps {
   narrative: string;
-  isSample: boolean;
+  hasOutcomeData: boolean;
   startFirms: FirmBar[];
   landingFirms: FirmCount[];
   seniority: SeniorityTier[];
@@ -42,8 +42,13 @@ function max(values: number[]): number {
   return Math.max(...values, 1);
 }
 
-function Pill() {
-  return <span className="illustrative-pill">Illustrative preview</span>;
+function EmptyState({ title, note }: { title: string; note: string }) {
+  return (
+    <div className="insight-empty">
+      <p className="insight-empty-title">{title}</p>
+      <p className="insight-empty-note">{note}</p>
+    </div>
+  );
 }
 
 function FirmList({ firms }: { firms: { company: string; count: number }[] }) {
@@ -104,32 +109,50 @@ export default function InsightsViews(props: InsightsViewsProps) {
 
   const [view, setView] = useState<"origins" | "outcomes" | "map">("origins");
 
+  const hasNarrative = props.hasOutcomeData && props.narrative.trim().length > 0;
+  const hasScorecard = props.signatureStats.length > 0;
+
   return (
     <section className="section">
       <div className="dash">
         <div className="panel col-12 insight-synthesis">
           <div className="insight-synthesis-head">
             <h3>Titans Over Time</h3>
-            {props.isSample && <Pill />}
           </div>
-          <p className="insight-narrative">{props.narrative}</p>
+          {hasNarrative ? (
+            <p className="insight-narrative">{props.narrative}</p>
+          ) : (
+            <EmptyState
+              title="No cohort summary yet"
+              note="This narrative is generated from real enrichment data. Enrich alumni to see how the cohort's story takes shape."
+            />
+          )}
         </div>
 
-        <div className="scorecard-bento col-12">
-          {props.signatureStats.map((s) => (
-            <div className="score-tile" key={s.label}>
-              <div className="score-value">{s.value}</div>
-              <div className="score-label">{s.label}</div>
-              <div className="score-detail">{s.detail}</div>
-              <div className="score-bar-track">
-                <div
-                  className="score-bar-fill"
-                  style={{ width: `${Math.min(s.pct, 100)}%` }}
-                />
+        {hasScorecard ? (
+          <div className="scorecard-bento col-12">
+            {props.signatureStats.map((s) => (
+              <div className="score-tile" key={s.label}>
+                <div className="score-value">{s.value}</div>
+                <div className="score-label">{s.label}</div>
+                <div className="score-detail">{s.detail}</div>
+                <div className="score-bar-track">
+                  <div
+                    className="score-bar-fill"
+                    style={{ width: `${Math.min(s.pct, 100)}%` }}
+                  />
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        ) : (
+          <div className="panel col-12">
+            <EmptyState
+              title="No scorecard yet"
+              note="Buy-side, MD+, founders and first-firm KPIs are measured per person during enrichment. They appear here once alumni are classified."
+            />
+          </div>
+        )}
 
         <div className="insight-tabs col-12">
           <button
@@ -146,7 +169,7 @@ export default function InsightsViews(props: InsightsViewsProps) {
             onClick={() => setView("outcomes")}
           >
             Outcomes
-            <span className="insight-tab-note">illustrative</span>
+            <span className="insight-tab-note">measured</span>
           </button>
           <button
             type="button"
@@ -191,38 +214,59 @@ export default function InsightsViews(props: InsightsViewsProps) {
             <div className="panel col-6">
               <div className="insight-synthesis-head">
                 <h3>Where they land</h3>
-                {props.isSample && <Pill />}
+                <span className="col-tag">current employer · measured</span>
               </div>
-              <FirmList firms={props.landingFirms} />
+              {props.landingFirms.length > 0 ? (
+                <FirmList firms={props.landingFirms} />
+              ) : (
+                <EmptyState
+                  title="No landing firms yet"
+                  note="Current employers are collected during enrichment."
+                />
+              )}
             </div>
 
             <div className="panel col-6">
               <div className="insight-synthesis-head">
                 <h3>What they&rsquo;re doing now</h3>
-                {props.isSample && <Pill />}
+                <span className="col-tag">current title · measured</span>
               </div>
-              <FirmList firms={titleFirms} />
+              {titleFirms.length > 0 ? (
+                <FirmList firms={titleFirms} />
+              ) : (
+                <EmptyState
+                  title="No current titles yet"
+                  note="Current titles are collected during enrichment."
+                />
+              )}
             </div>
 
             <div className="panel col-12">
               <div className="insight-synthesis-head">
                 <h3>How far they climb</h3>
-                {props.isSample && <Pill />}
+                <span className="col-tag">seniority ladder · measured</span>
               </div>
-              <div className="ladder">
-                {props.seniority.map((s) => (
-                  <div className="ladder-row" key={s.tier}>
-                    <span className="ladder-tier">{s.tier}</span>
-                    <div className="ladder-track">
-                      <div
-                        className="ladder-fill"
-                        style={{ width: `${(s.count / ladderMax) * 100}%` }}
-                      />
+              {props.seniority.length > 0 ? (
+                <div className="ladder">
+                  {props.seniority.map((s) => (
+                    <div className="ladder-row" key={s.tier}>
+                      <span className="ladder-tier">{s.tier}</span>
+                      <div className="ladder-track">
+                        <div
+                          className="ladder-fill"
+                          style={{ width: `${(s.count / ladderMax) * 100}%` }}
+                        />
+                      </div>
+                      <span className="ladder-v">{s.count.toLocaleString()}</span>
                     </div>
-                    <span className="ladder-v">{s.count.toLocaleString()}</span>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState
+                  title="No seniority ladder yet"
+                  note="The ladder is built from enriched current titles."
+                />
+              )}
             </div>
           </>
         )}

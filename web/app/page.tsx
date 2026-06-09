@@ -94,7 +94,7 @@ export default async function Home({
             overview: (
               <InsightsViews
                 narrative={insights.narrative}
-                isSample={insights.isSample}
+                hasOutcomeData={insights.hasOutcomeData}
                 startFirms={insights.startFirms}
                 landingFirms={insights.landingFirms}
                 seniority={insights.seniority}

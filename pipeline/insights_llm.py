@@ -32,6 +32,7 @@ from insights_store import (
     SENIORITY_UNKNOWN,
     FirmCount,
     SeniorityTier,
+    SignatureStat,
 )
 
 # Haiku 4.5 — same cheap, disciplined tier the rest of the pipeline uses.
@@ -193,23 +194,28 @@ def write_narrative(
     distinct_employers: int,
     founders_partners: int,
     seniority: Sequence[SeniorityTier] = (),
+    kpis: Sequence[SignatureStat] = (),
     model: str = HAIKU_MODEL,
     max_tokens: int = 320,
 ) -> NarrativeResult:
     """ONE Haiku call that writes cohort prose over the pre-computed numbers. The
     numbers are handed to the model as a fact sheet; the system prompt forbids
-    inventing or altering any statistic. Returns empty text (orchestrator keeps
-    the template) when nothing is enriched or the call yields nothing usable."""
+    inventing or altering any statistic. The four headline KPIs (buy-side, MD+,
+    founders, first-firm) are included when supplied so the prose can lead with
+    them. Returns empty text (orchestrator keeps the template) when nothing is
+    enriched or the call yields nothing usable."""
     if enriched == 0:
         return NarrativeResult("", 0, 0)
 
     firm_lines = "\n".join(f"  - {f.company}: {f.count} alumni" for f in firms[:5])
     senior_lines = "\n".join(f"  - {s.tier}: {s.count}" for s in seniority)
+    kpi_lines = "\n".join(f"  - {k.label}: {k.value} ({k.detail})" for k in kpis)
     facts = (
         f"Total alumni in cohort: {people}\n"
         f"Alumni with verified profile data so far: {enriched}\n"
         f"Distinct current employers on record: {distinct_employers}\n"
         f"Alumni in partner/founder/C-suite tiers: {founders_partners}\n"
+        f"Headline KPIs:\n{kpi_lines or '  (none)'}\n"
         f"Top landing firms:\n{firm_lines or '  (none)'}\n"
         f"Seniority breakdown:\n{senior_lines or '  (none)'}"
     )

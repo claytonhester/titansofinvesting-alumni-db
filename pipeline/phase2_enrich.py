@@ -42,6 +42,14 @@ from linkedin_firecrawl import fetch_linkedin, profile_needs_linkedin
 from pdl_enrich import enrich_pdl
 from pdl_verify import verify_pdl_claims
 from reconcile import reconcile_claims
+from career_analysis import first_post_grad_employer
+from grad_year import derive_grad_year
+from kpi_classify import MODEL_METHOD as KPI_METHOD, classify_kpis
+from person_insights_store import (
+    PersonInsight,
+    init_person_insights_schema,
+    upsert_person_insight,
+)
 from db import connect, init_schema
 from enrichment_store import (
     DECISION_ACCEPT,
@@ -367,6 +375,50 @@ def enrich_person(
     # collapse to one properly-cased entry.
     clean_rows = digest_claims(reconciled)
     replace_claims(conn, person.id, clean_rows)
+
+    # Per-person insights classification (Phase 2.5). Derive grad year (education
+    # year when present, else the school-aware Titan-class map), the first
+    # post-grad employer, then ask Haiku for the four cohort KPIs. The MD
+    # fair-shot rule is NOT applied here — this stores the per-person truth; the
+    # Phase-3 roll-up decides how to fold it. Never raises (classifier falls back
+    # to a deterministic keyword classification).
+    edu_texts = [
+        f"{c.value} {c.quote}".strip()
+        for c in clean_rows
+        if c.claim_type == "education"
+    ]
+    gy = derive_grad_year(person.school, person.titan_class, edu_texts)
+    first_employer = first_post_grad_employer(clean_rows, gy.year)
+    flags, kpi_in, kpi_out = classify_kpis(
+        anthropic, person.full_name, gy.year, first_employer, clean_rows
+    )
+    upsert_person_insight(
+        conn,
+        PersonInsight(
+            person_id=person.id,
+            grad_year=gy.year,
+            grad_year_source=gy.source,
+            first_employer=first_employer,
+            on_buy_side=flags.on_buy_side,
+            reached_md=flags.reached_md,
+            founder_partner=flags.founder_partner,
+            still_first_firm=flags.still_first_firm,
+            model=KPI_METHOD,
+        ),
+    )
+    _kpi_tags = [
+        name for name, on in (
+            ("buy-side", flags.on_buy_side), ("MD+", flags.reached_md),
+            ("founder/partner", flags.founder_partner),
+            ("first-firm", flags.still_first_firm),
+        ) if on
+    ]
+    print(
+        f"  insights: grad {gy.year or '?'} ({gy.source or 'unknown'}), "
+        f"first @ {first_employer or '?'}; "
+        f"KPIs: {', '.join(_kpi_tags) if _kpi_tags else 'none'}"
+    )
+
     mark_phase(conn, person.id, PHASE_STRUCTURING, "done")
 
     n_accept = sum(1 for v in verdicts if v.decision == DECISION_ACCEPT)
@@ -396,6 +448,7 @@ def enrich_person(
             + fc_news.input_tokens
             + rec_in
             + pdl_pv_in
+            + kpi_in
         ),
         haiku_out=(
             struct.output_tokens
@@ -403,6 +456,7 @@ def enrich_person(
             + fc_news.output_tokens
             + rec_out
             + pdl_pv_out
+            + kpi_out
         ),
         sonnet_in=identity.input_tokens,
         sonnet_out=identity.output_tokens,
@@ -426,6 +480,7 @@ def run(limit: int, name: str | None) -> int:
     with connect(DB_PATH) as conn:
         init_schema(conn)
         init_enrichment_schema(conn)
+        init_person_insights_schema(conn)
         people = _load_targets(conn, limit, name)
         if not people:
             print("Nothing to enrich (all targets done or none matched).", file=sys.stderr)
