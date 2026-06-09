@@ -1,6 +1,70 @@
 import { describe, expect, it } from "vitest";
 import type { Claim, Person } from "./db";
-import { buildResume } from "./resume";
+import { buildResume, reconcileCurrentTitle, splitTitleEmployer } from "./resume";
+
+interface E {
+  title: string;
+  company: string;
+  start: string | null;
+  end: string | null;
+  current: boolean;
+  confidence: number;
+  sourceUrl: string;
+}
+function entry(title: string, company: string, current: boolean, end: string | null = null): E {
+  return { title, company, start: "2020", end, current, confidence: 0.9, sourceUrl: "" };
+}
+
+describe("reconcileCurrentTitle", () => {
+  it("replaces a stale title that matches no role at the current employer", () => {
+    const hist = [entry("Vice President, Marketing", "Facteus", true)];
+    expect(reconcileCurrentTitle("PhD Student", "Facteus", hist as never)).toBe(
+      "Vice President, Marketing"
+    );
+  });
+  it("keeps the title when it matches a role at the employer", () => {
+    const hist = [entry("Senior Vice President, Customer Success", "QGenda", true)];
+    // current_title is a substring of the timeline role -> recognized as the same
+    // role, so it is kept as-is (no override).
+    expect(
+      reconcileCurrentTitle("Vice President, Customer Success", "QGenda", hist as never)
+    ).toBe("Vice President, Customer Success");
+  });
+  it("does nothing when there is no CURRENT role at the employer", () => {
+    const hist = [entry("Analyst", "Old Co", false, "2022")];
+    expect(reconcileCurrentTitle("Founder", "New Co", hist as never)).toBe("Founder");
+  });
+  it("is a no-op without an employer", () => {
+    expect(reconcileCurrentTitle("Analyst", null, [])).toBe("Analyst");
+  });
+});
+
+describe("splitTitleEmployer", () => {
+  it("splits an employer packed into the title when employer is empty", () => {
+    expect(splitTitleEmployer("Consultant at Boston Consulting Group", null)).toEqual([
+      "Consultant",
+      "Boston Consulting Group",
+    ]);
+  });
+  it("splits on the LAST ' at ' so multi-at titles resolve", () => {
+    expect(splitTitleEmployer("Head of M&A at Apollo", "")).toEqual([
+      "Head of M&A",
+      "Apollo",
+    ]);
+  });
+  it("keeps the title whole when a real employer already exists", () => {
+    expect(splitTitleEmployer("Consultant at BCG", "BCG")).toEqual([
+      "Consultant at BCG",
+      "BCG",
+    ]);
+  });
+  it("leaves a title without ' at ' untouched", () => {
+    expect(splitTitleEmployer("Senior Associate", null)).toEqual([
+      "Senior Associate",
+      null,
+    ]);
+  });
+});
 
 const PERSON: Person = {
   id: 1,
@@ -57,6 +121,41 @@ describe("buildResume experience dedup + grouping", () => {
     ]);
     expect(experienceGroups).toHaveLength(1);
     expect(experienceGroups[0].roles).toHaveLength(1);
+  });
+
+  it("coalesces the same role described two ways (Citi / Citigroup in New York)", () => {
+    const { experience, experienceGroups } = build([
+      career("Investment Banking Analyst at Citi (2015-2017)"),
+      career(
+        "Investment Banking Analyst in the Financial Institutions Group at Citigroup in New York (2015-2017)"
+      ),
+    ]);
+    // One real role, not two — same dates, compatible title/company.
+    expect(experience).toHaveLength(1);
+    expect(experienceGroups).toHaveLength(1);
+    // Keeps the more specific title and the cleaner (shorter) company.
+    expect(experience[0].title).toBe(
+      "Investment Banking Analyst in the Financial Institutions Group"
+    );
+    expect(experience[0].company).toBe("Citi");
+  });
+
+  it("does NOT coalesce a promotion at the same employer (different dates)", () => {
+    const { experience } = build([
+      career("Associate at Berkshire Partners (2021-2023)"),
+      career("Senior Associate at Berkshire Partners (2023-2024)"),
+    ]);
+    // Different date ranges => two distinct roles, even though 'Associate' is a
+    // token-run of 'Senior Associate'.
+    expect(experience).toHaveLength(2);
+  });
+
+  it("does NOT coalesce two same-date roles at unrelated firms", () => {
+    const { experience } = build([
+      career("Analyst at Goldman Sachs (2015-2017)"),
+      career("Analyst at Morgan Stanley (2015-2017)"),
+    ]);
+    expect(experience).toHaveLength(2);
   });
 
   it("groups multiple distinct roles at one employer into a single card", () => {
@@ -120,5 +219,25 @@ describe("buildResume experience dedup + grouping", () => {
       career("Vice President at Barclays (2009-2009)"),
     ]);
     expect(experienceGroups).toHaveLength(2);
+  });
+
+  it("parses em-dash (U+2014) year ranges without losing dates or polluting company", () => {
+    const { experienceGroups } = build([
+      career("Senior Manager at Company (2015—2017)"),
+    ]);
+    expect(experienceGroups).toHaveLength(1);
+    expect(experienceGroups[0].company).toBe("Company");
+    expect(experienceGroups[0].roles[0].start).toBe("2015");
+    expect(experienceGroups[0].roles[0].end).toBe("2017");
+  });
+});
+
+describe("reconcileCurrentTitle with multiple current roles", () => {
+  it("picks the most recently-started role when several are current at one employer", () => {
+    const hist = [
+      { title: "Vice President", company: "Acme", start: "2015", end: null, current: true, confidence: 0.9, sourceUrl: "" },
+      { title: "Managing Director", company: "Acme", start: "2022", end: null, current: true, confidence: 0.9, sourceUrl: "" },
+    ];
+    expect(reconcileCurrentTitle("Analyst", "Acme", hist as never)).toBe("Managing Director");
   });
 });
