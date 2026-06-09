@@ -51,6 +51,7 @@ class PdlAttributes:
     current_industry: str = ""
     current_company_size: str = ""
     job_function: str = ""          # PDL job_title_role (e.g. "finance")
+    job_sub_function: str = ""      # PDL job_title_sub_role (e.g. "investment_banking")
     pdl_seniority: str = ""         # PDL job_title_levels joined (e.g. "director")
     current_role_start_year: int | None = None
     years_experience: int | None = None
@@ -245,6 +246,7 @@ def _extract_attributes(data: dict) -> PdlAttributes:
         current_industry=_clean(data.get("job_company_industry")) or _clean(data.get("industry")),
         current_company_size=_clean(data.get("job_company_size")),
         job_function=_clean(data.get("job_title_role")),
+        job_sub_function=_clean(data.get("job_title_sub_role")),
         pdl_seniority=seniority,
         current_role_start_year=int(start_year) if start_year else None,
         # _opt_int keeps a real 0 as 0; only missing/invalid becomes None, so a
@@ -295,7 +297,12 @@ def _education_claim(entry: object, source_url: str, confidence: float) -> Claim
         return None
     degrees = entry.get("degrees") or []
     degree = _clean(degrees[0]) if degrees and isinstance(degrees[0], str) else ""
-    value = f"{degree} from {institution}" if degree else institution
+    majors = entry.get("majors") or []
+    major = _clean(majors[0]) if majors and isinstance(majors[0], str) else ""
+    # Field of study adds real clarity ("what Titans studied") without a new claim
+    # type: fold the major into the degree string ("BBA in Finance from UT").
+    study = f"{degree} in {major}" if degree and major else (degree or major)
+    value = f"{study} from {institution}" if study else institution
     end_year = _year(entry.get("end_date"))
     quote = f"Graduated {end_year}" if end_year else ""
     return _claim("education", value, source_url, quote, confidence)

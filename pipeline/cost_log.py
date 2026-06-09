@@ -34,6 +34,10 @@ SONNET_USD_PER_MTOK_OUT = 15.0
 # People Data Labs: charged per successful match only (misses are free). PDL's
 # Person Enrichment list price is ~$0.28/match on the pay-as-you-go tier.
 PDL_USD_PER_MATCH = 0.28
+# Perplexity /search: flat ~$0.005 per request, no token charge (the mention-
+# discovery pass makes one request per person). Previously untracked — folded in
+# so the run total isn't silently understated.
+PERPLEXITY_USD_PER_REQUEST = 0.005
 # GNews bills a flat monthly subscription, not per request, so there is no
 # per-call dollar price here — only an informational request count per run.
 
@@ -84,6 +88,8 @@ class CostEntry:
     claude_usd: float
     pdl_matches: int
     pdl_usd: float
+    perplexity_requests: int
+    perplexity_usd: float
     gnews_requests: int
     total_usd: float
 
@@ -100,6 +106,7 @@ def build_entry(
     credits_after: int | None = None,
     estimated_credits: int = 0,
     pdl_matches: int = 0,
+    perplexity_requests: int = 0,
     gnews_requests: int = 0,
 ) -> CostEntry:
     """Assemble a CostEntry. Prefer the measured credit delta; fall back to the
@@ -115,6 +122,7 @@ def build_entry(
     fc_usd = fc_credits * USD_PER_CREDIT
     c_usd = claude_usd(haiku_in, haiku_out, sonnet_in, sonnet_out)
     pdl_usd = max(0, pdl_matches) * PDL_USD_PER_MATCH
+    pplx_usd = max(0, perplexity_requests) * PERPLEXITY_USD_PER_REQUEST
     return CostEntry(
         timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         label=label,
@@ -129,8 +137,10 @@ def build_entry(
         claude_usd=round(c_usd, 4),
         pdl_matches=max(0, pdl_matches),
         pdl_usd=round(pdl_usd, 4),
+        perplexity_requests=max(0, perplexity_requests),
+        perplexity_usd=round(pplx_usd, 4),
         gnews_requests=max(0, gnews_requests),
-        total_usd=round(fc_usd + c_usd + pdl_usd, 4),
+        total_usd=round(fc_usd + c_usd + pdl_usd + pplx_usd, 4),
     )
 
 

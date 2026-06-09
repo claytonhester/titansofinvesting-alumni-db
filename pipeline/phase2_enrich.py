@@ -111,6 +111,7 @@ class _PersonUsage:
     pdl_usd: float
     fc_news_credits: int       # Firecrawl credits spent on the news-specific pass
     fc_news_articles: int      # confirmed news mentions found via Firecrawl+Claude
+    perplexity_requests: int   # Perplexity /search calls (mention discovery), 1/person
 
 
 @dataclass(frozen=True)
@@ -477,6 +478,7 @@ def enrich_person(
             current_industry=pdl_attrs.current_industry,
             current_company_size=pdl_attrs.current_company_size,
             job_function=pdl_attrs.job_function,
+            job_sub_function=pdl_attrs.job_sub_function,
             pdl_seniority=pdl_attrs.pdl_seniority,
             current_role_start_year=pdl_attrs.current_role_start_year,
             years_experience=pdl_attrs.years_experience,
@@ -561,6 +563,7 @@ def enrich_person(
         pdl_usd=pdl.cost_usd if pdl else 0.0,
         fc_news_credits=news_disc.credits_spent,
         fc_news_articles=n_fc_news,
+        perplexity_requests=mentions.perplexity_requests,
     )
 
 
@@ -600,6 +603,7 @@ def run(
         haiku_in = haiku_out = sonnet_in = sonnet_out = 0
         pdl_matches = 0
         fc_news_credits = fc_news_articles = 0
+        perplexity_requests = 0
         processed = 0
 
         with httpx.Client(timeout=30.0) as http:
@@ -619,6 +623,7 @@ def run(
                     pdl_matches += usage.pdl_matches
                     fc_news_credits += usage.fc_news_credits
                     fc_news_articles += usage.fc_news_articles
+                    perplexity_requests += usage.perplexity_requests
                     processed += 1
                 except PaymentRequiredError:
                     # No Firecrawl credits — abort the entire run immediately.
@@ -655,6 +660,7 @@ def run(
         credits_after=credits_after,
         estimated_credits=est_credits,
         pdl_matches=pdl_matches,
+        perplexity_requests=perplexity_requests,
     )
     append_entry(entry)
     if processed:

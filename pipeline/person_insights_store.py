@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS person_insights (
     current_industry        TEXT,
     current_company_size    TEXT,
     job_function            TEXT,
+    job_sub_function        TEXT,
     pdl_seniority           TEXT,
     current_role_start_year INTEGER,
     years_experience        INTEGER,
@@ -73,6 +74,7 @@ class PersonInsight:
     current_industry: str = ""
     current_company_size: str = ""
     job_function: str = ""
+    job_sub_function: str = ""
     pdl_seniority: str = ""
     current_role_start_year: int | None = None
     years_experience: int | None = None
@@ -87,9 +89,22 @@ class PersonInsight:
     model: str = ""
 
 
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after a DB was first created. CREATE TABLE IF NOT
+    EXISTS won't alter an existing table, so additive columns are migrated here.
+    Idempotent: only adds what's missing."""
+    have = {r[1] for r in conn.execute("PRAGMA table_info(person_insights)")}
+    additive = {"job_sub_function": "TEXT"}
+    for col, decl in additive.items():
+        if col not in have:
+            conn.execute(f"ALTER TABLE person_insights ADD COLUMN {col} {decl}")
+
+
 def init_person_insights_schema(conn: sqlite3.Connection) -> None:
-    """Create the per-person insights table. Safe to call repeatedly."""
+    """Create the per-person insights table, then apply additive migrations.
+    Safe to call repeatedly."""
     conn.executescript(_SCHEMA)
+    _ensure_columns(conn)
 
 
 def upsert_person_insight(conn: sqlite3.Connection, row: PersonInsight) -> None:
@@ -100,13 +115,13 @@ def upsert_person_insight(conn: sqlite3.Connection, row: PersonInsight) -> None:
             person_id, grad_year, grad_year_source, first_employer,
             on_buy_side, reached_md, founder_partner, still_first_firm,
             started_sell_side, current_industry, current_company_size,
-            job_function, pdl_seniority, current_role_start_year,
+            job_function, job_sub_function, pdl_seniority, current_role_start_year,
             years_experience, linkedin_connections, tenure_years, years_to_md,
             num_employers, has_advanced_degree, current_sector, left_texas,
             model, classified_at
         ) VALUES (
             :pid, :gy, :gys, :fe, :bs, :md, :fp, :sff, :sss, :ind, :size,
-            :func, :sen, :rsy, :yexp, :conn, :ten, :ytm, :nemp, :adv, :sec,
+            :func, :subfunc, :sen, :rsy, :yexp, :conn, :ten, :ytm, :nemp, :adv, :sec,
             :ltx, :model, datetime('now')
         )
         ON CONFLICT (person_id) DO UPDATE SET
@@ -121,6 +136,7 @@ def upsert_person_insight(conn: sqlite3.Connection, row: PersonInsight) -> None:
             current_industry        = excluded.current_industry,
             current_company_size    = excluded.current_company_size,
             job_function            = excluded.job_function,
+            job_sub_function        = excluded.job_sub_function,
             pdl_seniority           = excluded.pdl_seniority,
             current_role_start_year = excluded.current_role_start_year,
             years_experience        = excluded.years_experience,
@@ -147,6 +163,7 @@ def upsert_person_insight(conn: sqlite3.Connection, row: PersonInsight) -> None:
             "ind": row.current_industry,
             "size": row.current_company_size,
             "func": row.job_function,
+            "subfunc": row.job_sub_function,
             "sen": row.pdl_seniority,
             "rsy": row.current_role_start_year,
             "yexp": row.years_experience,
@@ -177,6 +194,7 @@ def _to_insight(row: sqlite3.Row) -> PersonInsight:
         current_industry=row["current_industry"] or "",
         current_company_size=row["current_company_size"] or "",
         job_function=row["job_function"] or "",
+        job_sub_function=(row["job_sub_function"] if "job_sub_function" in row.keys() else "") or "",
         pdl_seniority=row["pdl_seniority"] or "",
         current_role_start_year=row["current_role_start_year"],
         years_experience=row["years_experience"],
