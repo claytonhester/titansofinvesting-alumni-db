@@ -87,6 +87,7 @@ def enrich_pdl(
     company: str,
     city: str,
     *,
+    school: str = "",
     min_likelihood: int = PDL_ACCEPT,
     cost_usd_per_match: float,
     attempts: int = 3,
@@ -104,6 +105,11 @@ def enrich_pdl(
         params["company"] = company
     if city and city != "(unknown)":
         params["location"] = city
+    # School is an education anchor PDL matches on — we know every alum's school,
+    # so passing it sharpens disambiguation on common names (a documented match-rate
+    # lift) at no extra cost. Additive signal; never narrows a correct match.
+    if school and school.strip():
+        params["school"] = school.strip()
 
     payload = _get_with_retry(client, api_key, params, attempts, backoff_base)
     if payload is None:

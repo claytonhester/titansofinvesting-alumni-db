@@ -318,6 +318,7 @@ def enrich_person(
             person.full_name,
             pdl_company,
             person.city,
+            school=person.school,
             cost_usd_per_match=PDL_USD_PER_MATCH,
         )
         if pdl_key
