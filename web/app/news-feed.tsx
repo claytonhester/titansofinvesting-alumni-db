@@ -12,7 +12,6 @@ type Filter = "All" | NewsCategory;
 
 interface NewsFeedProps {
   items: NewsItem[];
-  isSample: boolean;
 }
 
 function byRecency(a: NewsItem, b: NewsItem): number {
@@ -94,7 +93,7 @@ function SourceLink({ item }: { item: NewsItem }) {
   );
 }
 
-export default function NewsFeed({ items, isSample }: NewsFeedProps) {
+export default function NewsFeed({ items }: NewsFeedProps) {
   const [filter, setFilter] = useState<Filter>("All");
 
   const counts = useMemo(() => {
@@ -126,17 +125,6 @@ export default function NewsFeed({ items, isSample }: NewsFeedProps) {
 
   return (
     <div className="news">
-      {isSample && (
-        <div className="news-banner">
-          <span className="news-banner-dot" aria-hidden="true" />
-          <span>
-            <strong>Sample preview.</strong> These articles illustrate the
-            vetted news layout. Live mentions appear here once the co-mention
-            and identity-gate pipeline runs.
-          </span>
-        </div>
-      )}
-
       <div className="news-filters" role="tablist" aria-label="News categories">
         <button
           type="button"

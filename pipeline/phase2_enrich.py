@@ -53,6 +53,8 @@ from grad_year import derive_grad_year
 from kpi_classify import MODEL_METHOD as KPI_METHOD, classify_kpis
 from profile_metrics import has_advanced_degree, left_texas
 from sector_classify import classify_sector
+from news_curate import curate_news
+from news_store import init_news_schema, replace_curated_news
 from person_insights_store import (
     PersonInsight,
     init_person_insights_schema,
@@ -452,6 +454,14 @@ def enrich_person(
         f"KPIs: {', '.join(_kpi_tags) if _kpi_tags else 'none'}"
     )
 
+    # Curate this person's press mentions into a categorized, summarized, ranked
+    # feed (one Haiku call). Never raises; falls back to neutral category + the
+    # scraped snippet so the feed still populates.
+    curated, news_in, news_out = curate_news(
+        anthropic, person.full_name, _verified_employer or person.company, clean_rows
+    )
+    replace_curated_news(conn, person.id, curated)
+
     mark_phase(conn, person.id, PHASE_STRUCTURING, "done")
 
     n_accept = sum(1 for v in verdicts if v.decision == DECISION_ACCEPT)
@@ -482,6 +492,7 @@ def enrich_person(
             + rec_in
             + pdl_pv_in
             + kpi_in
+            + news_in
         ),
         haiku_out=(
             struct.output_tokens
@@ -490,6 +501,7 @@ def enrich_person(
             + rec_out
             + pdl_pv_out
             + kpi_out
+            + news_out
         ),
         sonnet_in=identity.input_tokens,
         sonnet_out=identity.output_tokens,
@@ -514,6 +526,7 @@ def run(limit: int, name: str | None) -> int:
         init_schema(conn)
         init_enrichment_schema(conn)
         init_person_insights_schema(conn)
+        init_news_schema(conn)
         people = _load_targets(conn, limit, name)
         if not people:
             print("Nothing to enrich (all targets done or none matched).", file=sys.stderr)
