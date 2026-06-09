@@ -24,12 +24,23 @@ status, success, error}``. First exercised live once Firecrawl has credits.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from firecrawl import Firecrawl
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
 
 from enrichment_store import ClaimRow
+
+# Regex patterns for detecting "present" career entries in value/quote fields.
+# value format: "Title at Company (YYYY-present)"
+_PRESENT_VALUE_RE = re.compile(
+    r"\((\d{4})\s*[-–]\s*(?:now|present)\)", re.IGNORECASE
+)
+# quote format: "YYYY - present Title @ Company" (resume.ts QUOTE_RE shape)
+_PRESENT_QUOTE_RE = re.compile(
+    r"^(\d{4})\s*[-–]\s*(?:now|present)\b", re.IGNORECASE
+)
 
 EXTRACTION_METHOD = "firecrawl-linkedin"
 # LinkedIn is authoritative for a person's own career, but it's a name-based agent
@@ -47,15 +58,58 @@ LINKEDIN_MIN_CAREER = 3
 AGENT_CREDITS_PER_PERSON = 15
 
 
-def profile_needs_linkedin(claims, *, min_career: int = LINKEDIN_MIN_CAREER) -> bool:
-    """True when Firecrawl-scrape + PDL have NOT yet produced a complete-enough
-    profile — i.e. a whole section is missing or roles are sparse. Section-level,
-    not year-gap: missing current employer, no education, or < min_career roles.
-    A complete profile returns False so we skip the (billed) agent."""
+def _current_role_start_year_from_claims(claims) -> int | None:
+    """Scan career_history claims for the one marked present/now and return its
+    start year. Used by the year-gap heuristic when PDL doesn't supply the value."""
+    for c in claims:
+        if c.claim_type != "career_history":
+            continue
+        m = _PRESENT_VALUE_RE.search(c.value or "")
+        if m:
+            return int(m.group(1))
+        m = _PRESENT_QUOTE_RE.match(c.quote or "")
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def profile_needs_linkedin(
+    claims,
+    *,
+    min_career: int = LINKEDIN_MIN_CAREER,
+    grad_year: int | None = None,
+    current_role_start_year: int | None = None,
+) -> bool:
+    """True when Firecrawl-scrape + PDL have NOT produced a complete-enough profile.
+
+    Primary checks (section-level): missing current employer, no education, or
+    fewer than min_career career_history entries.
+
+    Year-gap heuristic: even when the primary checks pass, fire the LinkedIn agent
+    if the span from grad_year to current_role_start_year is long relative to the
+    number of career entries we have. A large gap with few entries implies lost
+    employers (the Komson/TRS pattern: PDL returned the current role but silently
+    dropped 8+ years at a prior employer).
+
+    Rule of thumb: expect at least one distinct employer per 4 career years.
+    So a 12-year gap should have >= 3 entries; a 5-year gap >= 2, etc.
+    The floor is always min_career so we never lower the absolute bar.
+    """
     career = sum(1 for c in claims if c.claim_type == "career_history")
     has_employer = any(c.claim_type == "current_employer" for c in claims)
     has_education = any(c.claim_type == "education" for c in claims)
-    return (not has_employer) or (not has_education) or (career < min_career)
+
+    if (not has_employer) or (not has_education) or (career < min_career):
+        return True
+
+    if grad_year is not None and current_role_start_year is not None:
+        gap = current_role_start_year - grad_year
+        if gap > 4:
+            expected_min = max(min_career, gap // 4)
+            if career < expected_min:
+                return True
+
+    return False
 
 
 @dataclass(frozen=True)
@@ -92,8 +146,19 @@ class LinkedInBudget:
         self.remaining = max(0, total_credits)
         self.min_verified_sources = min_verified_sources
 
-    def decide(self, claims, trusted_count: int) -> LinkedInDecision:
-        if not profile_needs_linkedin(claims):
+    def decide(
+        self,
+        claims,
+        trusted_count: int,
+        *,
+        grad_year: int | None = None,
+        current_role_start_year: int | None = None,
+    ) -> LinkedInDecision:
+        if not profile_needs_linkedin(
+            claims,
+            grad_year=grad_year,
+            current_role_start_year=current_role_start_year,
+        ):
             return LinkedInDecision(False, "profile already complete")
         if trusted_count < self.min_verified_sources:
             return LinkedInDecision(False, "no verified web presence")

@@ -41,6 +41,16 @@ const PARENT_WORD = /\b(university|college|institute|polytechnic|academy)\b/i;
 // instead of forming a duplicate card. Keyed by lowercased canonical name.
 const CANONICAL_ALIASES: Record<string, string> = {
   "mays business school": "Texas A&M University",
+  // McCombs is UT-Austin's business school — group its degrees under the parent
+  // so a "McCombs MBA" and a "University of Texas MBA" don't form two cards.
+  "mccombs school of business": "The University of Texas at Austin",
+  "texas mccombs school of business": "The University of Texas at Austin",
+  "red mccombs school of business": "The University of Texas at Austin",
+  "the university of texas": "The University of Texas at Austin",
+  // Other recurring sub-schools, mapped to their parent university.
+  "kellogg school of management": "Northwestern University",
+  "the wharton school": "University of Pennsylvania",
+  "booth school of business": "University of Chicago",
 };
 
 // Strip a single trailing parenthetical — graduation years or honors that would
@@ -129,14 +139,90 @@ function buildKeyMerges(keys: string[]): Map<string, string> {
   return winner;
 }
 
+// Canonical degree levels, checked in order (specific before generic) so
+// "Master of Business Administration" resolves to MBA, not the generic MASTER.
+const DEGREE_LEVELS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\b(ph\.?\s?d|doctor of philosophy|doctorate)\b/i, "PHD"],
+  [/\b(j\.?\s?d|juris doctor)\b/i, "JD"],
+  [/\b(m\.?\s?b\.?\s?a|master of business administration)\b/i, "MBA"],
+  [/\bmaster of real estate\b/i, "MRE"],
+  [/\b(m\.?\s?s|master of science)\b/i, "MS"],
+  [/\b(m\.?\s?a|master of arts)\b/i, "MA"],
+  [/\bmaster(?:'s)?\b/i, "MASTER"],
+  [/\b(b\.?\s?b\.?\s?a|bachelor of business administration)\b/i, "BBA"],
+  [/\b(b\.?\s?s|bachelor of science)\b/i, "BS"],
+  [/\b(b\.?\s?a|bachelor of arts)\b/i, "BA"],
+  [/\bbachelor(?:'s)?\b/i, "BACHELOR"],
+];
+
+function degreeLevel(degree: string): string | null {
+  for (const [re, level] of DEGREE_LEVELS) {
+    if (re.test(degree)) return level;
+  }
+  return null;
+}
+
+// The field of study left after the degree level is removed — used to tell
+// "MBA" (no field) apart from "BBA in Finance", and to recognize that "MBA" and
+// "Master of Business Administration in Real Estate Finance" share the MBA level.
+function degreeField(degree: string): string {
+  let s = ` ${degree.toLowerCase()} `;
+  for (const [re] of DEGREE_LEVELS) {
+    s = s.replace(new RegExp(re.source, "gi"), " ");
+  }
+  s = s
+    .replace(/\(.*?\)/g, " ")
+    .replace(/\b(in|of|the|with|honors|honours|candidate|degree|from)\b/g, " ");
+  return s.replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+// Collapse same-level degrees that are the same credential phrased differently:
+// a bare level ("MBA") folds into a more descriptive one of the same level
+// ("Master of Business Administration"), and two with overlapping fields merge,
+// keeping the most descriptive display. Degrees of different levels, or the same
+// level with distinct fields ("BS in Math" vs "BS in Physics"), stay separate.
+// Unknown-level strings fall back to exact case-insensitive de-dup.
 function dedupeDegrees(degrees: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
+  const buckets = new Map<string, string[]>();
+  const order: string[] = [];
   for (const d of degrees) {
-    const norm = d.toLowerCase().trim();
-    if (!norm || seen.has(norm)) continue;
-    seen.add(norm);
-    out.push(d);
+    const norm = d.trim();
+    if (!norm) continue;
+    const level = degreeLevel(norm) ?? `raw:${norm.toLowerCase()}`;
+    const bucket = buckets.get(level);
+    if (bucket) {
+      bucket.push(norm);
+    } else {
+      buckets.set(level, [norm]);
+      order.push(level);
+    }
+  }
+
+  const out: string[] = [];
+  for (const level of order) {
+    const items = buckets.get(level)!;
+    if (level.startsWith("raw:")) {
+      out.push(items[0]); // unknown level: bucket key already deduped identicals
+      continue;
+    }
+    const kept: Array<{ field: string; display: string }> = [];
+    // Most descriptive first so the specific phrasing wins the merge.
+    for (const d of [...items].sort((a, b) => b.length - a.length)) {
+      const field = degreeField(d);
+      const match = kept.find(
+        (k) =>
+          field === "" ||
+          k.field === "" ||
+          k.field.includes(field) ||
+          field.includes(k.field)
+      );
+      if (match) {
+        if (d.length > match.display.length) match.display = d;
+        continue;
+      }
+      kept.push({ field, display: d });
+    }
+    out.push(...kept.map((k) => k.display));
   }
   return out;
 }

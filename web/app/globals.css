@@ -857,6 +857,29 @@ a:hover {
   color: var(--maroon);
   font-weight: 600;
 }
+.company-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  text-decoration: none;
+  color: var(--ink);
+  font-size: 13px;
+  cursor: pointer;
+}
+.company-chip-name { font-weight: 600; }
+.company-chip-meta { color: var(--ink-soft); }
+.company-chip .link-go {
+  color: var(--maroon);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.company-chip:hover .link-go { opacity: 1; }
+.company-chip:hover, .company-chip:hover * { text-decoration: none; }
 .resume-actions {
   flex: none;
   display: flex;
@@ -915,7 +938,7 @@ a:hover {
 }
 .resume-main { min-width: 0; }
 
-.resume-section { margin-bottom: 38px; }
+.resume-section { margin-bottom: 38px; margin-top: 28px; }
 .resume-section-head {
   font-size: 12px;
   font-weight: 700;
@@ -963,54 +986,103 @@ a:hover {
   border-color: var(--maroon);
   box-shadow: 0 0 0 4px var(--maroon-tint-strong);
 }
-.xp-body { padding-bottom: 24px; }
-.xp-dates {
+.xp-body {
+  display: block;
+  padding-bottom: 24px;
+}
+.xp-role-row {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 20px;
+  margin-top: 2px;
+}
+.xp-dates {
   font-size: 12.5px;
   font-weight: 600;
   color: var(--ink-soft);
   font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  text-align: right;
+  white-space: nowrap;
 }
 .now-pill {
-  background: var(--maroon-tint);
-  color: var(--maroon);
+  background: var(--maroon);
+  color: #fff;
   border-radius: 999px;
-  padding: 1px 8px;
-  font-size: 11px;
+  padding: 2px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
   letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .xp-title {
   font-size: 16px;
   font-weight: 600;
-  margin: 4px 0 1px;
+  margin: 5px 0 4px;
   letter-spacing: -0.01em;
 }
-.xp-co { color: var(--ink-soft); font-size: 14.5px; margin: 0; }
+.xp-title.is-current { color: var(--maroon); }
+a.xp-title {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+a.xp-title:hover { text-decoration: underline; text-decoration-color: currentColor; }
+.xp-co {
+  color: var(--ink-soft);
+  font-size: 14px;
+  font-weight: 500;
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+.xp-co.is-current { font-style: italic; color: var(--maroon); }
 
-/* Multi-role company group: company header once, roles nested beneath */
+/* Legacy company-only header (kept for safety) */
 .xp-group-co {
-  color: var(--ink);
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  margin: 4px 0 1px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  margin: 4px 0 8px;
+  letter-spacing: 0;
 }
-.xp-group-span { margin-bottom: 10px; }
 .xp-roles {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 5px;
   padding-left: 14px;
-  border-left: 2px solid var(--line);
+  margin-top: 10px;
 }
-.xp-role .xp-title {
-  font-size: 14.5px;
-  font-weight: 600;
-  margin: 2px 0 0;
+.xp-role {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 20px;
+  font-size: 14px;
 }
-.xp-role .xp-dates { font-size: 12px; }
+.xp-role-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+.xp-role-title.is-current {
+  font-weight: 700;
+  color: var(--maroon);
+}
+.xp-role-date {
+  flex-shrink: 0;
+  text-align: right;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 /* Education */
 .edu-list { display: flex; flex-direction: column; gap: 14px; }
@@ -1054,6 +1126,7 @@ a:hover {
 }
 .news-row { align-items: flex-start; }
 .news-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.news-summary { font-size: 13px; color: var(--ink); line-height: 1.45; }
 .news-meta { font-size: 12px; color: var(--ink-soft); }
 
 /* Tabbed views (home) */
@@ -1432,6 +1505,14 @@ a:hover {
   box-shadow: var(--shadow-sm);
   overflow: hidden;
 }
+.side-attribution {
+  padding: 12px 16px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  font-style: italic;
+  line-height: 1.4;
+  margin: 0;
+}
 .side-stat {
   padding: 16px 18px;
   border-bottom: 1px solid var(--line);
@@ -1505,4 +1586,20 @@ a:hover {
   .col-6, .col-4, .col-8 { grid-column: span 12; }
   .stat-row { grid-template-columns: repeat(2, 1fr); }
   .chat-bar-wrap { max-width: 100%; }
+  /* Profile + company pages: collapse the two-column body to one. */
+  .resume-body { grid-template-columns: 1fr; gap: 24px; }
+}
+
+/* Profile + company page headers stack on phones — otherwise the avatar, a long
+   title, and the LinkedIn action button overlap in a cramped flex row. */
+@media (max-width: 640px) {
+  .resume-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+  }
+  .avatar { width: 60px; height: 60px; font-size: 22px; border-radius: 16px; }
+  .resume-actions { align-items: flex-start; width: 100%; }
+  .resume-id h1 { font-size: clamp(26px, 7vw, 34px); }
+  .company-chip { flex-wrap: wrap; }
 }

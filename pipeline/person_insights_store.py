@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS person_insights (
     has_advanced_degree INTEGER NOT NULL DEFAULT 0,
     current_sector      TEXT,
     left_texas          INTEGER,           -- 1 / 0 / NULL (unknown)
+    employer_domain     TEXT    NOT NULL DEFAULT '',  -- join key to companies(domain)
     model             TEXT    NOT NULL DEFAULT '',
     classified_at    TEXT    NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (person_id) REFERENCES people (id)
@@ -86,6 +87,7 @@ class PersonInsight:
     has_advanced_degree: bool = False
     current_sector: str = ""
     left_texas: bool | None = None
+    employer_domain: str = ""
     model: str = ""
 
 
@@ -94,7 +96,10 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
     EXISTS won't alter an existing table, so additive columns are migrated here.
     Idempotent: only adds what's missing."""
     have = {r[1] for r in conn.execute("PRAGMA table_info(person_insights)")}
-    additive = {"job_sub_function": "TEXT"}
+    additive = {
+        "job_sub_function": "TEXT",
+        "employer_domain": "TEXT NOT NULL DEFAULT ''",
+    }
     for col, decl in additive.items():
         if col not in have:
             conn.execute(f"ALTER TABLE person_insights ADD COLUMN {col} {decl}")
@@ -118,11 +123,11 @@ def upsert_person_insight(conn: sqlite3.Connection, row: PersonInsight) -> None:
             job_function, job_sub_function, pdl_seniority, current_role_start_year,
             years_experience, linkedin_connections, tenure_years, years_to_md,
             num_employers, has_advanced_degree, current_sector, left_texas,
-            model, classified_at
+            employer_domain, model, classified_at
         ) VALUES (
             :pid, :gy, :gys, :fe, :bs, :md, :fp, :sff, :sss, :ind, :size,
             :func, :subfunc, :sen, :rsy, :yexp, :conn, :ten, :ytm, :nemp, :adv, :sec,
-            :ltx, :model, datetime('now')
+            :ltx, :empdom, :model, datetime('now')
         )
         ON CONFLICT (person_id) DO UPDATE SET
             grad_year               = excluded.grad_year,
@@ -147,6 +152,7 @@ def upsert_person_insight(conn: sqlite3.Connection, row: PersonInsight) -> None:
             has_advanced_degree     = excluded.has_advanced_degree,
             current_sector          = excluded.current_sector,
             left_texas              = excluded.left_texas,
+            employer_domain         = excluded.employer_domain,
             model                   = excluded.model,
             classified_at           = datetime('now')
         """,
@@ -174,6 +180,7 @@ def upsert_person_insight(conn: sqlite3.Connection, row: PersonInsight) -> None:
             "adv": 1 if row.has_advanced_degree else 0,
             "sec": row.current_sector,
             "ltx": None if row.left_texas is None else (1 if row.left_texas else 0),
+            "empdom": row.employer_domain or "",
             "model": row.model,
         },
     )
@@ -205,6 +212,7 @@ def _to_insight(row: sqlite3.Row) -> PersonInsight:
         has_advanced_degree=bool(row["has_advanced_degree"]),
         current_sector=row["current_sector"] or "",
         left_texas=None if lt is None else bool(lt),
+        employer_domain=(row["employer_domain"] if "employer_domain" in row.keys() else "") or "",
         model=row["model"],
     )
 

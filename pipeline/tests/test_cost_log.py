@@ -171,6 +171,39 @@ def test_perplexity_requests_priced_and_in_total() -> None:
 
 
 @pytest.mark.unit
+def test_sonar_usd_passed_through_and_in_total() -> None:
+    """Sonar is token-priced with an authoritative usage.cost, so the dollar
+    figure is computed by the caller and passed in directly — recorded on its own
+    line and folded into total_usd."""
+    entry = build_entry(
+        label="run",
+        people=5,
+        haiku_in=0,
+        haiku_out=0,
+        sonar_requests=5,
+        sonar_usd=0.0412,
+    )
+    assert entry.sonar_requests == 5
+    assert entry.sonar_usd == pytest.approx(0.0412)
+    assert entry.total_usd == pytest.approx(0.0412)
+
+
+@pytest.mark.unit
+def test_negative_sonar_usd_clamped() -> None:
+    """A bad cost figure can't credit the run — clamp to zero."""
+    entry = build_entry(
+        label="run",
+        people=1,
+        haiku_in=0,
+        haiku_out=0,
+        sonar_requests=1,
+        sonar_usd=-1.0,
+    )
+    assert entry.sonar_usd == 0.0
+    assert entry.total_usd == 0.0
+
+
+@pytest.mark.unit
 def test_gnews_requests_informational_not_in_total() -> None:
     """GNews is a flat subscription — its request count is recorded but must NOT
     inflate total_usd."""

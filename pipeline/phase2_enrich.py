@@ -42,6 +42,7 @@ from normalize import digest_claims
 from profile_cleanup import clean_profile
 from linkedin_firecrawl import (
     LinkedInBudget,
+    _current_role_start_year_from_claims,
     agent_batch_budget,
     fetch_linkedin,
 )
@@ -54,12 +55,20 @@ from career_analysis import (
     tenure_years,
     years_to_md,
 )
-from grad_year import derive_grad_year
+from grad_year import derive_grad_year, grad_year_from_class
 from kpi_classify import MODEL_METHOD as KPI_METHOD, classify_kpis
 from profile_metrics import has_advanced_degree, left_texas
 from sector_classify import classify_sector
+from article_context import make_firecrawl_fetcher
+from company_enrich import _bare_domain as _company_domain
 from news_curate import curate_news
 from news_store import init_news_schema, replace_curated_news
+from sonar_news import discover_press_sonar
+from person_company_store import (
+    PersonCompany,
+    init_person_company_schema,
+    replace_person_companies,
+)
 from person_insights_store import (
     PersonInsight,
     init_person_insights_schema,
@@ -112,6 +121,8 @@ class _PersonUsage:
     fc_news_credits: int       # Firecrawl credits spent on the news-specific pass
     fc_news_articles: int      # confirmed news mentions found via Firecrawl+Claude
     perplexity_requests: int   # Perplexity /search calls (mention discovery), 1/person
+    sonar_requests: int        # Perplexity Sonar press-discovery calls, 1/person
+    sonar_usd: float           # Sonar dollar cost (authoritative usage.cost when given)
 
 
 @dataclass(frozen=True)
@@ -353,7 +364,21 @@ def enrich_person(
     # When it does run, the reconciler merges it with PDL + scrape.
     li_credits = 0
     n_li = 0
-    decision = li_budget.decide(claim_rows, len(trusted))
+    # Derive grad_year and current_role_start_year for the year-gap heuristic.
+    # Use the class map (always available) for grad_year; prefer PDL's authoritative
+    # current_role_start_year over parsing claims (PDL is more reliable for this).
+    _li_grad_year = grad_year_from_class(person.school, person.titan_class)
+    _li_role_start = (
+        pdl.attributes.current_role_start_year
+        if pdl is not None
+        else _current_role_start_year_from_claims(claim_rows)
+    )
+    decision = li_budget.decide(
+        claim_rows,
+        len(trusted),
+        grad_year=_li_grad_year,
+        current_role_start_year=_li_role_start,
+    )
     if not decision.fire:
         print(f"  Firecrawl LinkedIn: skipped ({decision.reason})")
     else:
@@ -418,6 +443,19 @@ def enrich_person(
     )
     if mentions.claim_rows:
         claim_rows.extend(mentions.claim_rows)
+
+    # Perplexity Sonar press pass: web-grounded, cited, person-specific press
+    # (interviews, podcasts, awards/rankings, appointments). Off the Firecrawl
+    # budget; gated by Sonar's own is_about_this_person reasoning, then fed — as
+    # news_mention claims — through the SAME strict curator below as every other
+    # press source. Key-gated and never-raises, like the /search pass.
+    sonar = discover_press_sonar(
+        http, person.full_name,
+        _verified_employer or person.company, person.city,
+        perplexity_key=perplexity_key,
+    )
+    if sonar.claim_rows:
+        claim_rows.extend(sonar.claim_rows)
 
     # LLM reconciliation: the sources disagree on phrasing/freshness, so before
     # the deterministic digest, let Haiku merge same-real-world-fact résumé claims
@@ -493,9 +531,30 @@ def enrich_person(
             has_advanced_degree=has_advanced_degree(edu_texts),
             current_sector=classify_sector(current_employer_val),
             left_texas=left_texas(current_location_val),
+            # Firm domain from PDL (free) → join key for the cached company layer.
+            employer_domain=_company_domain(pdl_attrs.company_website),
             model=KPI_METHOD,
         ),
     )
+
+    # Career-history firm links (current + past, with domain/title/years) → powers
+    # the company page's "who works here now / who worked here before" view. Free
+    # on a PDL match (domains ride the experience[] array). Replace-per-person.
+    if pdl is not None and pdl.career_links:
+        replace_person_companies(conn, person.id, [
+            PersonCompany(
+                person_id=person.id,
+                domain=_company_domain(cl.domain),
+                company_name=cl.company_name,
+                title=cl.title,
+                start_year=cl.start_year,
+                end_year=cl.end_year,
+                is_current=cl.is_current,
+                source="pdl",
+            )
+            for cl in pdl.career_links
+        ])
+
     _kpi_tags = [
         name for name, on in (
             ("buy-side", flags.on_buy_side), ("MD+", flags.reached_md),
@@ -513,7 +572,11 @@ def enrich_person(
     # feed (one Haiku call). Never raises; falls back to neutral category + the
     # scraped snippet so the feed still populates.
     curated, news_in, news_out = curate_news(
-        anthropic, person.full_name, _verified_employer or person.company, clean_rows
+        anthropic, person.full_name, _verified_employer or person.company, clean_rows,
+        # Verify would-be-shown items against the real article (Firecrawl scrape) so
+        # an award page that only name-drops the person is dropped, not shown as
+        # theirs. Scrape credits land in the run's measured credit delta.
+        fetch_article=make_firecrawl_fetcher(firecrawl),
     )
     replace_curated_news(conn, person.id, curated)
 
@@ -526,6 +589,7 @@ def enrich_person(
     n_pdl_claims = (len(pdl.claim_rows) - pdl_dropped) if pdl else 0
     n_mentions = len(mentions.claim_rows)
     n_fc_news = len(fc_news.claim_rows)
+    n_sonar = len(sonar.claim_rows)
     print(
         f"  {person.full_name}: {len(disc.sources)} sources -> "
         f"{n_accept} accepted ({n_pre} by pre-filter), {n_review} to review; "
@@ -534,6 +598,7 @@ def enrich_person(
         f"{f' (-{pdl_dropped} PDL gated)' if pdl_dropped else ''}"
         f"{f' (+{n_li} LinkedIn)' if n_li else ''}"
         f"{f' (+{n_fc_news} press)' if n_fc_news else ''}"
+        f"{f' (+{n_sonar} sonar press)' if n_sonar else ''}"
         f"{f' (+{n_mentions} verified mentions)' if n_mentions else ''}; "
         f"{len(pre.ambiguous)} sent to Sonnet; "
         f"{disc.credits_spent + li_credits + news_disc.credits_spent} credits total"
@@ -565,6 +630,8 @@ def enrich_person(
         fc_news_credits=news_disc.credits_spent,
         fc_news_articles=n_fc_news,
         perplexity_requests=mentions.perplexity_requests,
+        sonar_requests=sonar.requests,
+        sonar_usd=sonar.cost_usd,
     )
 
 
@@ -587,6 +654,7 @@ def run(
         init_schema(conn)
         init_enrichment_schema(conn)
         init_person_insights_schema(conn)
+        init_person_company_schema(conn)
         init_news_schema(conn)
         people = _load_targets(conn, limit, name, titan_class, school)
         if not people:
@@ -605,6 +673,8 @@ def run(
         pdl_matches = 0
         fc_news_credits = fc_news_articles = 0
         perplexity_requests = 0
+        sonar_requests = 0
+        sonar_usd = 0.0
         processed = 0
 
         with httpx.Client(timeout=30.0) as http:
@@ -625,6 +695,8 @@ def run(
                     fc_news_credits += usage.fc_news_credits
                     fc_news_articles += usage.fc_news_articles
                     perplexity_requests += usage.perplexity_requests
+                    sonar_requests += usage.sonar_requests
+                    sonar_usd += usage.sonar_usd
                     processed += 1
                 except PaymentRequiredError:
                     # No Firecrawl credits — abort the entire run immediately.
@@ -662,6 +734,8 @@ def run(
         estimated_credits=est_credits,
         pdl_matches=pdl_matches,
         perplexity_requests=perplexity_requests,
+        sonar_requests=sonar_requests,
+        sonar_usd=sonar_usd,
     )
     append_entry(entry)
     if processed:
