@@ -57,6 +57,26 @@ class KpiFlags:
     reached_md: bool
     founder_partner: bool
     still_first_firm: bool
+    # Did their FIRST post-grad employer sit in banking or consulting/accounting?
+    # Combined with on_buy_side at roll-up time this measures the classic
+    # "moved from a bank or consultancy into investing" migration.
+    started_sell_side: bool = False
+
+
+# First-employer names that mark a banking / consulting / accounting start, for
+# the deterministic fallback. Curated for this dataset's most common feeders.
+_SELL_SIDE_FIRST_KW = (
+    # bulge-bracket / investment banking
+    "goldman", "morgan stanley", "jpmorgan", "jp morgan", "j.p. morgan",
+    "bank of america", "merrill", "citigroup", "citi", "barclays", "ubs",
+    "credit suisse", "deutsche bank", "lazard", "evercore", "moelis",
+    "jefferies", "rbc", "wells fargo", "investment bank", " bank",
+    # consulting
+    "mckinsey", "bain", "boston consulting", "bcg", "accenture", "consulting",
+    # accounting / Big Four
+    "deloitte", "pwc", "pricewaterhouse", "ernst", "kpmg", " ey", "ey ",
+    "audit", "accounting",
+)
 
 
 _SYSTEM = """You classify one finance/investing professional — an alumnus of a \
@@ -77,10 +97,14 @@ general-partner / managing-partner seat (not merely a salaried 'partner'-in-name
 title at a Big Four firm — judge by substance when you can).
 - still_first_firm: their current employer is the SAME organization as their \
 first post-grad employer given below (allow for renames/acquisitions).
+- started_sell_side: their FIRST post-grad employer (given below) was an \
+investment bank, a management/strategy consultancy, or an accounting/audit firm \
+(Big Four) — i.e. a classic banking/consulting/accounting starting role, as \
+opposed to starting directly in investing, industry, or government.
 
 Return ONLY this JSON object, nothing else:
 {"on_buy_side": bool, "reached_md": bool, "founder_partner": bool, \
-"still_first_firm": bool}"""
+"still_first_firm": bool, "started_sell_side": bool}"""
 
 
 def _field(claims: list[ClaimRow], claim_type: str) -> str:
@@ -131,7 +155,11 @@ def deterministic_flags(
     still_first = bool(first_employer) and bool(cur_employer) and (
         _norm_firm(first_employer) == _norm_firm(cur_employer)
     )
-    return KpiFlags(on_buy_side, reached_md, founder_partner, still_first)
+    fe = f" {first_employer.lower()} "
+    started_sell_side = bool(first_employer) and any(kw in fe for kw in _SELL_SIDE_FIRST_KW)
+    return KpiFlags(
+        on_buy_side, reached_md, founder_partner, still_first, started_sell_side
+    )
 
 
 def _build_user(
@@ -220,5 +248,6 @@ def classify_kpis(
         reached_md=_coerce(obj, "reached_md", fallback.reached_md),
         founder_partner=_coerce(obj, "founder_partner", fallback.founder_partner),
         still_first_firm=_coerce(obj, "still_first_firm", fallback.still_first_firm),
+        started_sell_side=_coerce(obj, "started_sell_side", fallback.started_sell_side),
     )
     return flags, tok_in, tok_out

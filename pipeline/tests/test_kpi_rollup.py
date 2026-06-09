@@ -6,16 +6,17 @@ from kpi_rollup import (
     count_flag,
     kpi_signature_stats,
     reached_md_stats,
+    transitioned_count,
     with_kpi_stats,
 )
 from person_insights_store import PersonInsight
 
 
-def _p(pid, *, grad=None, md=False, buy=False, fp=False, sff=False):
+def _p(pid, *, grad=None, md=False, buy=False, fp=False, sff=False, sss=False):
     return PersonInsight(
         person_id=pid, grad_year=grad, grad_year_source="class-map",
         first_employer="X", on_buy_side=buy, reached_md=md,
-        founder_partner=fp, still_first_firm=sff,
+        founder_partner=fp, still_first_firm=sff, started_sell_side=sss,
     )
 
 
@@ -104,6 +105,21 @@ def test_with_kpi_stats_overlays_tiles_and_founders():
     out = with_kpi_stats(_blank_snap(), people, snapshot_year=2026)
     assert [s.label for s in out.signature_stats][0] == "Now on the buy-side"
     assert out.founders_partners == 2  # re-derived from per-person flags
+
+
+def test_transitioned_count_requires_both():
+    people = [
+        _p(1, buy=True, sss=True),    # moved in from banking -> counts
+        _p(2, buy=True, sss=False),   # buy-side but didn't start sell-side
+        _p(3, buy=False, sss=True),   # started sell-side, still there
+    ]
+    assert transitioned_count(people) == 1
+
+
+def test_buy_side_detail_shows_transition():
+    people = [_p(1, buy=True, sss=True), _p(2, buy=True, sss=True)]
+    stats = kpi_signature_stats(people, snapshot_year=2026)
+    assert "2 moved in from banking or consulting" == stats[0].detail
 
 
 def test_with_kpi_stats_empty_keeps_founders_clears_tiles():

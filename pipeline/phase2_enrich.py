@@ -403,6 +403,7 @@ def enrich_person(
             reached_md=flags.reached_md,
             founder_partner=flags.founder_partner,
             still_first_firm=flags.still_first_firm,
+            started_sell_side=flags.started_sell_side,
             model=KPI_METHOD,
         ),
     )

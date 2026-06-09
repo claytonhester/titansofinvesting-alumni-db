@@ -466,6 +466,37 @@ export function geoSpread(limit = 8): GeoSpread[] {
     .all(limit) as GeoSpread[];
 }
 
+// Map view: prefer each person's CURRENT location (an enriched `location` claim)
+// and fall back to the program-era roster city when they aren't enriched yet, so
+// "where they are" reflects where alumni live now rather than where they started.
+// City buckets are normalized to the segment before the first comma so an
+// enriched "Austin, TX" and a roster "Austin" tally together.
+export function currentGeoSpread(limit = 8): GeoSpread[] {
+  const rows = db()
+    .prepare(
+      `SELECT COALESCE(NULLIF(TRIM(loc.value), ''), p.city) AS raw
+       FROM people p
+       LEFT JOIN (
+         SELECT person_id, MIN(value) AS value
+         FROM claims
+         WHERE claim_type = 'location' AND TRIM(value) <> ''
+         GROUP BY person_id
+       ) loc ON loc.person_id = p.id`
+    )
+    .all() as { raw: string | null }[];
+
+  const tally = new Map<string, number>();
+  for (const { raw } of rows) {
+    const city = (raw ?? "").split(",")[0].trim();
+    if (!city || city === "(unknown)") continue;
+    tally.set(city, (tally.get(city) ?? 0) + 1);
+  }
+  return [...tally.entries()]
+    .map(([city, count]) => ({ city, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
+}
+
 export interface EnrichedPerson {
   name_slug: string;
   full_name: string;
