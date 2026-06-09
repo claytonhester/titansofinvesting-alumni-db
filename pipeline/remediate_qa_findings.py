@@ -32,13 +32,10 @@ from datetime import datetime
 from pathlib import Path
 
 from config import DB_PATH
+from directory_hosts import PUBLIC_RECORDS_HOSTS
 
-# Hosts whose news rows are public-records disclosures, not editorial news. Mirrors
-# news_curate._PUBLIC_RECORDS_HOSTS — keep in sync.
-_PUBLIC_RECORDS_HOSTS = (
-    "texastaxpayers.com", "governmentsalaries.com", "govsalaries.com",
-    "openpayrolls.com", "transparentcalifornia.com", "openthebooks.com",
-)
+# News rows from these hosts are public-records disclosures, not editorial news.
+_PUBLIC_RECORDS_HOSTS = tuple(sorted(PUBLIC_RECORDS_HOSTS))
 
 _NAMESAKE_PERSON_ID = 779  # Ricardo Lopez
 _NAMESAKE_TABLES = ("claims", "person_sources", "identity_candidates", "person_insights")
