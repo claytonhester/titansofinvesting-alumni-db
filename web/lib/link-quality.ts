@@ -54,6 +54,14 @@ const DROP_HOSTS = new Set<string>([
   "reddit.com",
   "medium.com",
   "loopnet.com",
+  // public-records / government-salary databases — a transparency disclosure, not a
+  // personal appearance (mirrors pipeline news_curate._PUBLIC_RECORDS_HOSTS)
+  "texastaxpayers.com",
+  "governmentsalaries.com",
+  "govsalaries.com",
+  "openpayrolls.com",
+  "transparentcalifornia.com",
+  "openthebooks.com",
 ]);
 
 // Title fragments that mark firm boilerplate / filings / directory headings —
@@ -108,6 +116,13 @@ function isDroppedHost(host: string): boolean {
   if (DROP_HOSTS.has(host)) return true;
   const registrable = host.split(".").slice(-2).join(".");
   return DROP_HOSTS.has(registrable);
+}
+
+// True when a URL's host is a data-broker / records / social-noise host that should
+// not be shown as a provenance source on the profile's "Sourced from" panel. Reuses
+// the same drop list as the appearance-link filter so the two stay consistent.
+export function isLowValueSourceUrl(url: string): boolean {
+  return isDroppedHost(hostOf(url));
 }
 
 function isBoilerplateTitle(title: string): boolean {

@@ -72,6 +72,18 @@ describe("usefulLinks", () => {
     expect(usefulLinks(links, "Jane Doe")).toEqual([]);
   });
 
+  it("drops public-records / salary-database hosts (texastaxpayers.com)", () => {
+    // A government-salary disclosure is not a personal appearance; surfacing it
+    // (even just the link) is the same privacy/quality problem as in the news feed.
+    const links = [
+      {
+        label: "Majority of Highest Paid State Employees Work for TRS",
+        url: "https://www.texastaxpayers.com/majority-of-highest-paid-state-employees/",
+      },
+    ];
+    expect(usefulLinks(links, "Kimberly Carey")).toEqual([]);
+  });
+
   it("drops data-broker SUBDOMAINS (app./api./profiles.)", () => {
     // hostOf must compare the registrable domain, not just strip www. — otherwise
     // app.apollo.io / api.crunchbase.com slip past the DROP_HOSTS check.

@@ -232,6 +232,32 @@ describe("buildResume experience dedup + grouping", () => {
   });
 });
 
+describe("buildResume sources panel", () => {
+  it("excludes public-records / data-broker hosts from the 'Sourced from' list", () => {
+    const claims: Claim[] = [
+      {
+        claim_type: "education",
+        value: "BBA From Baylor University",
+        source_url: "https://baylor.edu/profile",
+        quote: "",
+        confidence: 0.9,
+        extraction_method: "test",
+      },
+      {
+        claim_type: "public_links",
+        value: "Highest Paid State Employees",
+        source_url: "https://www.texastaxpayers.com/highest-paid",
+        quote: "",
+        confidence: 0.9,
+        extraction_method: "test",
+      },
+    ];
+    const { sources } = buildResume(PERSON, claims);
+    expect(sources.some((u) => u.includes("texastaxpayers"))).toBe(false);
+    expect(sources.some((u) => u.includes("baylor.edu"))).toBe(true);
+  });
+});
+
 describe("reconcileCurrentTitle with multiple current roles", () => {
   it("picks the most recently-started role when several are current at one employer", () => {
     const hist = [
