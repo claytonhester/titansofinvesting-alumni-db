@@ -39,6 +39,7 @@ from news_enrich import NewsEnrichResult, extract_news_mentions
 from discovery import DiscoveryResult, NewsDiscoveryResult, Source, _domain, discover, discover_news
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
 from normalize import digest_claims
+from profile_cleanup import clean_profile
 from linkedin_firecrawl import (
     LinkedInBudget,
     agent_batch_budget,
@@ -420,7 +421,11 @@ def enrich_person(
     # Normalize casing and deduplicate before persisting — ensures "senior
     # investment manager" and "Senior Investment Manager" from two sources
     # collapse to one properly-cased entry.
-    clean_rows = digest_claims(reconciled)
+    digested = digest_claims(reconciled)
+    # Deterministic cleanup the probabilistic reconciler can't be trusted to do:
+    # one current role, no student-program / volunteer / personal-site careers, no
+    # employer-as-title. Pure; never raises.
+    clean_rows = clean_profile(digested)
     replace_claims(conn, person.id, clean_rows)
 
     # Per-person insights classification (Phase 2.5). Derive grad year (education

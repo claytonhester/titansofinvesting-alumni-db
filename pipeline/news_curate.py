@@ -23,6 +23,43 @@ from structuring import HAIKU_MODEL
 
 _DATE_SEP = " — "  # matches web/lib/news.ts NEWS_DATE_SEP
 
+# Press hits land in TWO claim types: `news_mention` (Firecrawl press pass, dated)
+# and `public_links` (the Perplexity mention pass + PDL profiles). public_links is
+# overloaded — it also holds social profiles and people-directory aggregator pages,
+# which are NOT news. We curate news_mention plus the press-worthy public_links,
+# dropping links whose host is a social network or a directory aggregator.
+_SOCIAL_HOSTS = frozenset({
+    "linkedin.com", "twitter.com", "x.com", "facebook.com", "instagram.com",
+    "youtube.com", "youtu.be", "klout.com", "foursquare.com", "pinterest.com",
+    "tiktok.com", "threads.net", "reddit.com", "medium.com",
+})
+_DIRECTORY_HOSTS = frozenset({
+    "theorg.com", "advisorcheck.com", "indyfin.com", "getwarmer.com",
+    "app.getwarmer.com", "crunchbase.com", "zoominfo.com", "rocketreach.co",
+    "signalhire.com", "wsj.com/market-data", "bloomberg.com/profile",
+    "pitchbook.com", "zoomgov.com", "spokeo.com",
+})
+
+
+def _is_press_worthy_link(host: str) -> bool:
+    """A public_links host counts as a press mention only if it's neither a social
+    network nor a people-directory aggregator (those are profiles, not news)."""
+    if not host:
+        return False
+    return host not in _SOCIAL_HOSTS and host not in _DIRECTORY_HOSTS
+
+
+def news_items(claims: list[ClaimRow]) -> list[ClaimRow]:
+    """The claims to curate: every news_mention, plus public_links whose host is a
+    genuine content source (not a social profile or directory listing)."""
+    items: list[ClaimRow] = []
+    for c in claims:
+        if c.claim_type == "news_mention":
+            items.append(c)
+        elif c.claim_type == "public_links" and _is_press_worthy_link(_host(c.source_url)):
+            items.append(c)
+    return items
+
 
 def _split_value(value: str) -> tuple[str, str]:
     """news_mention value is 'YYYY-MM-DD — Headline'; split off a leading ISO date."""
@@ -122,10 +159,12 @@ def curate_news(
     model: str = HAIKU_MODEL,
     max_tokens: int = 1024,
 ) -> tuple[list[CuratedNews], int, int]:
-    """Curate a person's news_mention claims. Returns (curated, haiku_in,
-    haiku_out). Every article yields a row (model verdict, or a deterministic
-    fallback). Returns ([], 0, 0) when there are no mentions."""
-    items = [c for c in mentions if c.claim_type == "news_mention"]
+    """Curate a person's press mentions. Returns (curated, haiku_in, haiku_out).
+    Reads news_mention claims AND press-worthy public_links (see news_items), so
+    Perplexity-discovered articles/podcasts surface, not just the Firecrawl press
+    pass. Every article yields a row (model verdict, or a deterministic fallback).
+    Returns ([], 0, 0) when there are no mentions."""
+    items = news_items(mentions)
     if not items:
         return [], 0, 0
 
