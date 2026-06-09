@@ -47,20 +47,40 @@ Each profile is assembled from multiple sources (Firecrawl web scrape, a LinkedI
 agent, PeopleDataLabs, and Perplexity mentions) about ONE finance/investing \
 professional — an alumnus of a Texas university program.
 
-You are given the person's anchors (name, employer on record, city) and their \
-assembled facts. Judge ONLY what is shown; do not invent. Score each dimension \
-1-5 (5 = excellent, 1 = broken):
-- current_role: is there exactly one sensible current title + employer?
-- career: is the work history complete, dated, and free of duplicate roles?
+CRITICAL — how to read the anchors: the "employer on record" and "city" are the \
+person's details AT THE TIME THEY WERE IN THE PROGRAM, often years ago. They are \
+a STALE starting point, NOT the expected current state. An alumnus who has since \
+moved to a different employer, city, or seniority is the NORMAL, CORRECT case — \
+that is career progression, NOT a wrong-person error. The anchor's only hard job \
+is the NAME and a PLAUSIBLE career arc (a finance/investing professional whose \
+history could credibly start from that program). Do NOT penalize, and do NOT call \
+a namesake splice, simply because the current employer/city differs from the \
+anchor. Only treat differing facts as a namesake problem when they are MUTUALLY \
+INCONSISTENT WITH EACH OTHER (e.g. two simultaneous full-time current roles in \
+unrelated fields/geographies that no single career path explains).
+
+Judge ONLY what is shown; do not invent. Score each dimension 1-5 (5 = excellent, \
+1 = broken):
+- current_role: is there exactly one sensible current title + employer? (It need \
+NOT match the anchor employer — a newer employer scores full marks.)
+- career: is the work history complete, dated, and free of duplicate roles? \
+(A role spanning a single year, e.g. "(2018-2018)", that duplicates a longer \
+"(2018-present)" role at the same employer is a zero-duration artifact — flag it.)
 - education: clean, grouped, no junk (e.g. an airline listed as a school)?
-- bio: does the bio match the facts without adding anything not present?
-- identity: do ALL facts cohere as the SAME person consistent with the anchors? \
-(A stray role/degree from a different field/geography = a namesake splice.)
+- bio: does the bio describe the person accurately and lead with their CURRENT \
+role (not a former one), without adding anything not present in the facts?
+- identity: do the assembled facts cohere AS A SINGLE PERSON — i.e. are they \
+mutually consistent with one plausible career arc? Judge internal consistency, \
+NOT agreement with the (stale) anchor. A stray role/degree from a different \
+field/geography that cannot fit one career = a namesake splice.
 - formatting: professional casing, clean titles, no scrape artifacts?
 
 Then list concrete issues. Severity:
-- P0: wrong-person data (namesake splice), no current role, or corrupted core facts.
-- P1: a missing/duplicated role, an inconsistency, a thin/uncertain entry.
+- P0: facts that cannot belong to one person (genuine namesake splice — mutually \
+inconsistent, not merely anchor-divergent), corrupted core facts, or NO current \
+role present at all. A current role that simply differs from the anchor is NOT P0.
+- P1: a missing/duplicated role, a zero-duration role artifact, a bio that leads \
+with a stale role, an internal inconsistency, a thin/uncertain entry.
 - P2: cosmetic (casing, a slightly messy title).
 
 Return ONLY JSON:

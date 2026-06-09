@@ -38,7 +38,7 @@ from news_enrich import NewsEnrichResult, extract_news_mentions
 from discovery import DiscoveryResult, NewsDiscoveryResult, Source, _domain, discover, discover_news
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
 from normalize import digest_claims
-from linkedin_firecrawl import fetch_linkedin
+from linkedin_firecrawl import fetch_linkedin, profile_needs_linkedin
 from pdl_enrich import enrich_pdl
 from pdl_verify import verify_pdl_claims
 from reconcile import reconcile_claims
@@ -280,23 +280,30 @@ def enrich_person(
         pdl_dropped = n_before - len(kept_pdl)
         claim_rows.extend(kept_pdl)
 
-    # Firecrawl agent-mode LinkedIn — a CORE source alongside PDL. Plain scrape is
-    # auth-walled out of LinkedIn; the agent reads the public profile. Runs for
-    # everyone; the reconciler merges it with PDL + Firecrawl-scrape (and now
-    # records all contributing sources). Skips cleanly on 0 credits.
+    # Firecrawl agent-mode LinkedIn — a CORE source, but GAP-FILLING, not blanket.
+    # Plain scrape is auth-walled out of LinkedIn; the agent reads the public
+    # profile. The agent is billed and variable (observed 45–324 credits/call), so
+    # it fires ONLY when Firecrawl-scrape + PDL left the profile thin (missing
+    # current employer, no education, or < 3 roles). A profile PDL already filled
+    # would just get a duplicate, so we skip it and save the credits. When it does
+    # run, the reconciler merges it with PDL + scrape and records all contributors.
     li_credits = 0
     n_li = 0
-    try:
-        li = fetch_linkedin(
-            firecrawl, person.full_name,
-            employer=_verified_employer or person.company, city=person.city,
-        )
-        li_credits = li.credits_used
-        n_li = len(li.claim_rows)
-        if li.claim_rows:
-            claim_rows.extend(li.claim_rows)
-    except PaymentRequiredError:
-        print("  Firecrawl LinkedIn: no credits — skipped")
+    li_skipped = not profile_needs_linkedin(claim_rows)
+    if li_skipped:
+        print("  Firecrawl LinkedIn: profile already complete — skipped (saved credits)")
+    else:
+        try:
+            li = fetch_linkedin(
+                firecrawl, person.full_name,
+                employer=_verified_employer or person.company, city=person.city,
+            )
+            li_credits = li.credits_used
+            n_li = len(li.claim_rows)
+            if li.claim_rows:
+                claim_rows.extend(li.claim_rows)
+        except PaymentRequiredError:
+            print("  Firecrawl LinkedIn: no credits — skipped")
 
     # Compose a short_bio from the verified facts when no source handed us a
     # ready-made narrative. Built from the FULL résumé set (Firecrawl + PDL), so a

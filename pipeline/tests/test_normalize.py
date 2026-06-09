@@ -238,6 +238,13 @@ class TestIsJunkValue:
     def test_recognizes_junk(self, value):
         assert is_junk_value(value) is True
 
+    @pytest.mark.parametrize("value", [
+        "Location Data Unavailable", "location unavailable", "  Not Specified ",
+        "Undisclosed", "data unavailable", "Not Found",
+    ])
+    def test_recognizes_placeholder_phrases(self, value):
+        assert is_junk_value(value) is True
+
     @pytest.mark.parametrize("value", ["Austin, Texas", "Managing Director", "KKR", "Trueblood Capital"])
     def test_real_values_not_junk(self, value):
         assert is_junk_value(value) is False

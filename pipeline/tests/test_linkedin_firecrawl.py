@@ -6,12 +6,57 @@ from __future__ import annotations
 import pytest
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
 
+from enrichment_store import ClaimRow
 from linkedin_firecrawl import (
     EXTRACTION_METHOD,
     build_prompt,
     fetch_linkedin,
     map_claims,
+    profile_needs_linkedin,
 )
+
+
+def _c(claim_type, value="x"):
+    return ClaimRow(claim_type=claim_type, value=value, source_url="", quote="",
+                    confidence=0.8, extraction_method="pdl")
+
+
+def _rich_profile():
+    """A profile complete enough to skip the billed LinkedIn agent."""
+    return [
+        _c("current_employer", "Acme"),
+        _c("education", "BBA, Texas A&M"),
+        _c("career_history", "Partner at Acme"),
+        _c("career_history", "VP at Beta"),
+        _c("career_history", "Analyst at Gamma"),
+    ]
+
+
+def test_profile_needs_linkedin_false_when_complete():
+    assert profile_needs_linkedin(_rich_profile()) is False
+
+
+def test_profile_needs_linkedin_true_missing_employer():
+    claims = [c for c in _rich_profile() if c.claim_type != "current_employer"]
+    assert profile_needs_linkedin(claims) is True
+
+
+def test_profile_needs_linkedin_true_missing_education():
+    claims = [c for c in _rich_profile() if c.claim_type != "education"]
+    assert profile_needs_linkedin(claims) is True
+
+
+def test_profile_needs_linkedin_true_too_few_roles():
+    claims = [
+        _c("current_employer", "Acme"),
+        _c("education", "BBA"),
+        _c("career_history", "Partner at Acme"),  # only 1 role < 3
+    ]
+    assert profile_needs_linkedin(claims) is True
+
+
+def test_profile_needs_linkedin_true_on_empty():
+    assert profile_needs_linkedin([]) is True
 
 
 def test_build_prompt_includes_qualifiers():
