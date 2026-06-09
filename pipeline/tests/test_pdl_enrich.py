@@ -219,6 +219,23 @@ def test_min_likelihood_passed_to_server() -> None:
 
 
 @pytest.mark.unit
+def test_school_anchor_passed_to_server() -> None:
+    """School is an education anchor we always have — it must reach PDL to sharpen
+    common-name disambiguation."""
+    seen: dict[str, str] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.update(dict(req.url.params))
+        return httpx.Response(404)
+
+    enrich_pdl(
+        _client(handler), "key", "Jane Doe", "Apex Capital", "Austin",
+        school="Texas A&M University", cost_usd_per_match=_PER_MATCH,
+    )
+    assert seen["school"] == "Texas A&M University"
+
+
+@pytest.mark.unit
 def test_unknown_anchors_are_omitted_from_query() -> None:
     """'(unknown)' company/city are placeholders, not real anchors — don't send."""
     seen: dict[str, str] = {}
