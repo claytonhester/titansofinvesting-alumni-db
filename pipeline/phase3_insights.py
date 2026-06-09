@@ -38,12 +38,18 @@ from insights_rollup import (
     _value_counts,
     build_snapshot,
     landing_firms,
+    with_llm_narrative,
 )
 from insights_store import (
     InsightsSnapshot,
     init_insights_schema,
     replace_snapshot,
-    with_llm_narrative,
+)
+from kpi_rollup import with_kpi_stats
+from person_insights_store import (
+    PersonInsight,
+    all_person_insights,
+    init_person_insights_schema,
 )
 
 
@@ -53,8 +59,9 @@ def _apply_llm_overlay(
 ) -> InsightsSnapshot:
     """Run the two billed Haiku calls and overlay their outputs onto the
     deterministic snapshot. Seniority is reclassified over the full title
-    vocabulary; the narrative is rewritten over the SAME pre-computed numbers.
-    Token counts ride along on the returned snapshot for cost logging."""
+    vocabulary; the narrative is rewritten over the SAME pre-computed numbers
+    (including the four headline KPIs already on the snapshot). Token counts ride
+    along on the returned snapshot for cost logging."""
     anthropic = Anthropic(api_key=require_key("ANTHROPIC_API_KEY"))
 
     title_counts = _value_counts(conn, "current_title")
@@ -72,6 +79,7 @@ def _apply_llm_overlay(
         distinct_employers=distinct_employers,
         founders_partners=snap.founders_partners,
         seniority=new_seniority,
+        kpis=snap.signature_stats,
     )
 
     overlaid = with_llm_narrative(
@@ -90,11 +98,17 @@ def run(year: int | None, use_llm: bool) -> int:
     with connect(DB_PATH) as conn:
         init_schema(conn)
         init_insights_schema(conn)
+        init_person_insights_schema(conn)
 
         snap = build_snapshot(conn, snapshot_year)
         if snap.people_total == 0:
             print("No people in cohort — nothing to snapshot.", file=sys.stderr)
             return 1
+
+        # Overlay the four per-person KPIs as the scorecard (empty until people
+        # are classified, so the web shows an empty state rather than zeros).
+        insights = all_person_insights(conn)
+        snap = with_kpi_stats(snap, insights, snapshot_year=snapshot_year)
 
         if use_llm:
             snap = _apply_llm_overlay(conn, snap)

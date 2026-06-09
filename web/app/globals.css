@@ -434,6 +434,32 @@ a:hover {
   color: var(--ink);
   max-width: 70ch;
 }
+.insight-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  min-height: 96px;
+  padding: 22px 24px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  background: var(--maroon-tint);
+}
+.insight-empty-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.insight-empty-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  max-width: 60ch;
+}
 .col-tag {
   font-size: 11px;
   font-weight: 600;
