@@ -50,7 +50,7 @@ _DIRECTORY_HOSTS = frozenset({
 # An item only earns a slot in the feed if the model says show=True AND it clears
 # this importance bar. The feed is meant to be SCARCE — most people have nothing
 # genuinely newsworthy, and that's fine. Tune up to be stricter.
-NEWS_MIN_IMPORTANCE = 0.55
+NEWS_MIN_IMPORTANCE = 0.5
 
 # Title patterns for firm boilerplate, directory listings, and filings — pages that
 # are NOT "about the person doing something", just their name on a corporate/profile
@@ -128,12 +128,19 @@ deals, "what the company is doing")
    - profile/directory/listing pages, "team" pages, bios, regulatory filings
    - passing name-drops, generic PR, anything where they are not the subject
    When in doubt, set show=false.
+   IMPORTANT: if the person is INDIVIDUALLY named, quoted, or featured, the item is \
+about them even when the headline leads with their employer or an agency (e.g. \
+"Highest-paid employees at X" that names them, or "X firm's CIO says ..."). Judge \
+by whether THIS person is singled out, not by what the headline starts with.
 2. category — choose EXACTLY ONE, copied verbatim:
    - "Funding & Deals" (a deal THEY led / are quoted on)
    - "Leadership Moves" (THEIR hire, promotion, new role, board seat, departure)
    - "Market Views" (THEIR commentary, outlook, interview, podcast)
-   - "Recognition" (an award/ranking/honor naming THEM)
-   - "Company News" (about the firm, not them — almost always pair with show=false)
+   - "Recognition" (an award/ranking/honor naming THEM — including being \
+individually named in a notable list: highest-paid, top performers, power lists, \
+40-under-40, etc.)
+   - "Company News" (about the firm with the person NOT individually featured — \
+pair with show=false)
 3. summary — ONE plain sentence (max ~25 words), leading with the PERSON, on what \
 they did or said. No hype, no preamble.
 4. importance — float 0.0-1.0: how notable this is (a fund close, a major \
