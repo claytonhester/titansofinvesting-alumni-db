@@ -33,6 +33,14 @@ _PAREN_YEARS_RE = re.compile(r"\((\d{4})\s*[-–]\s*(\d{4}|present|current)?\)",
 _QUOTE_YEARS_RE = re.compile(r"\b(\d{4})\s*[-–]\s*(\d{4}|present|current)\b", re.IGNORECASE)
 _ANY_YEAR_RE = re.compile(r"\b(19[7-9]\d|20[0-3]\d)\b")
 
+# Corporate suffixes that follow a comma INSIDE a company name ("Heritage Asset
+# Advisors LTD, LLP") — so a comma before one of these is part of the company,
+# not a title/company separator.
+_CORP_SUFFIXES = frozenset({
+    "llp", "lp", "llc", "inc", "ltd", "co", "plc", "pllc", "lllp", "l.p.",
+    "l.l.c.", "inc.", "ltd.", "co.", "corp", "corp.", "sa", "ag", "gmbh",
+})
+
 
 @dataclass(frozen=True)
 class CareerEntry:
@@ -42,14 +50,37 @@ class CareerEntry:
     end_year: int | None  # None == ongoing/"present" or unknown
 
 
+def _company_from_quote(quote: str) -> str:
+    """Collectors emit the quote as '... TITLE @ COMPANY'. When present, the text
+    after the last ' @ ' is a reliable company name (lowercased)."""
+    if " @ " in (quote or ""):
+        return quote.rsplit(" @ ", 1)[-1].strip()
+    return ""
+
+
 def _split_title_company(text: str) -> tuple[str, str]:
-    """Split "TITLE at COMPANY" -> (title, company). No " at " -> all title."""
-    # Drop a trailing "(....)" date parenthetical before splitting.
+    """Split a role string into (title, company), handling the three real shapes:
+      "Title at Company"     -> ("Title", "Company")
+      "Title, Company"       -> ("Title", "Company")   (the reconciler's format)
+      "Company LTD, LLP"     -> ("", "Company LTD, LLP") (comma before a suffix)
+      "Company"              -> ("", "")  ambiguous; caller may use the quote
+    The trailing "(years)" parenthetical is dropped first."""
     head = re.sub(r"\s*\([^)]*\)\s*$", "", text).strip()
-    # Split on the LAST " at " so "Head of Research at X at Y" keeps the firm.
-    parts = re.split(r"\s+at\s+", head, flags=re.IGNORECASE)
-    if len(parts) >= 2:
+
+    # 1. " at " split (last occurrence, so "Head of Research at X at Y" keeps Y).
+    if re.search(r"\s+at\s+", head, flags=re.IGNORECASE):
+        parts = re.split(r"\s+at\s+", head, flags=re.IGNORECASE)
         return parts[0].strip(), parts[-1].strip()
+
+    # 2. First-comma split — but if the bit after the comma is just a corporate
+    #    suffix, the comma is inside the company name (so it's company-only).
+    if "," in head:
+        left, right = head.split(",", 1)
+        if right.strip().lower().rstrip(".") in _CORP_SUFFIXES:
+            return "", head
+        return left.strip(), right.strip()
+
+    # 3. No separator — let the caller fall back to the quote's "@ company".
     return head, ""
 
 
@@ -70,8 +101,12 @@ def _years(value: str, quote: str) -> tuple[int | None, int | None]:
 
 
 def parse_career_entry(value: str, quote: str = "") -> CareerEntry:
-    """Parse one career_history claim into a structured entry. Never raises."""
+    """Parse one career_history claim into a structured entry. Never raises.
+    When the value alone doesn't yield a company, the quote's '@ COMPANY' marker
+    is used as a fallback so reconciled/comma-formatted roles still resolve."""
     title, company = _split_title_company(value or "")
+    if not company:
+        company = _company_from_quote(quote or "")
     start, end = _years(value or "", quote or "")
     return CareerEntry(title=title, company=company, start_year=start, end_year=end)
 

@@ -136,6 +136,21 @@ def test_attributes_default_empty_when_absent() -> None:
 
 
 @pytest.mark.unit
+def test_zero_years_experience_preserved_not_nulled() -> None:
+    """A real 0 (founder <1yr, 0 connections) must survive, not become None."""
+    record = {"likelihood": 9, "data": {
+        "job_title": "Founder", "inferred_years_experience": 0,
+        "linkedin_connections": 0,
+    }}
+    client = _client(lambda req: httpx.Response(200, json=record))
+    attrs = enrich_pdl(
+        client, "key", "Jane Doe", "", "", cost_usd_per_match=_PER_MATCH,
+    ).attributes
+    assert attrs.years_experience == 0
+    assert attrs.linkedin_connections == 0
+
+
+@pytest.mark.unit
 def test_career_history_uses_parseable_quote_shape() -> None:
     """A dated role emits the 'YYYY - end Title @ Company' quote resume.ts parses
     first, so the timeline renders with its years."""
