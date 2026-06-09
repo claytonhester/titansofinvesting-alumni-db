@@ -41,6 +41,10 @@ _AGGREGATOR_DOMAINS = frozenset({
     # entry, not a page about the person.
     "govsalaries.com", "salaries.texastribune.org", "openpayrolls.com",
     "transparentcalifornia.com",
+    # The Titans program's OWN pages are our source roster, not enrichment — a name
+    # match there is circular (it lists every alumnus). Drop so people_search /
+    # web_search can't "rescue" an empty profile with the directory it came from.
+    "titansofinvesting.org", "titansofinvesting.com",
 })
 
 # Employer tokens too generic to prove a co-mention on their own.
