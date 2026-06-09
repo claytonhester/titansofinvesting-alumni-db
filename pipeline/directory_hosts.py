@@ -28,6 +28,16 @@ DIRECTORY_HOSTS: frozenset[str] = frozenset(
     }
 )
 
+# Public-records / government-salary databases. A name here is a transparency
+# disclosure, not editorial news — and surfacing a person's specific salary is a
+# privacy/tone problem. Dropped from the news feed and the web link/source panels.
+PUBLIC_RECORDS_HOSTS: frozenset[str] = frozenset(
+    {
+        "texastaxpayers.com", "governmentsalaries.com", "govsalaries.com",
+        "openpayrolls.com", "transparentcalifornia.com", "openthebooks.com",
+    }
+)
+
 # Social-noise networks: a presence here is not a professional identity source.
 SOCIAL_HOSTS: frozenset[str] = frozenset(
     {

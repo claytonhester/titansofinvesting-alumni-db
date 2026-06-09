@@ -20,6 +20,12 @@ from urllib.parse import urlparse
 from anthropic import Anthropic
 
 from article_context import name_window
+from directory_hosts import (
+    DIRECTORY_HOSTS,
+    PUBLIC_RECORDS_HOSTS,
+    SOCIAL_HOSTS,
+    registrable_host,
+)
 from enrichment_store import ClaimRow
 from news_store import NEWS_CATEGORIES, CuratedNews
 from structuring import HAIKU_MODEL
@@ -37,26 +43,16 @@ _DATE_SEP = " — "  # matches web/lib/news.ts NEWS_DATE_SEP
 # overloaded — it also holds social profiles and people-directory aggregator pages,
 # which are NOT news. We curate news_mention plus the press-worthy public_links,
 # dropping links whose host is a social network or a directory aggregator.
-_SOCIAL_HOSTS = frozenset({
-    "linkedin.com", "twitter.com", "x.com", "facebook.com", "instagram.com",
-    "youtube.com", "youtu.be", "klout.com", "foursquare.com", "pinterest.com",
-    "tiktok.com", "threads.net", "reddit.com", "medium.com",
+# Social + directory/broker hosts share the core defined in directory_hosts.py;
+# news keeps a couple of path-scoped market-data entries as local extras.
+_SOCIAL_HOSTS = SOCIAL_HOSTS
+_DIRECTORY_HOSTS = DIRECTORY_HOSTS | frozenset({
+    "wsj.com/market-data", "bloomberg.com/profile",
 })
-_DIRECTORY_HOSTS = frozenset({
-    "theorg.com", "advisorcheck.com", "indyfin.com", "getwarmer.com",
-    "app.getwarmer.com", "crunchbase.com", "zoominfo.com", "rocketreach.co",
-    "signalhire.com", "wsj.com/market-data", "bloomberg.com/profile",
-    "pitchbook.com", "zoomgov.com", "spokeo.com",
-})
-# Public-records / government-salary databases. A name appearing on one of these is
-# a transparency disclosure, not editorial news — and surfacing a person's specific
-# salary ("X earned $408,000") on a profile is a privacy/tone problem. These are
-# dropped from the feed regardless of the model's category/importance verdict.
-# (Live case: a TRS "Highest Paid State Employees" row mis-shown as Recognition.)
-_PUBLIC_RECORDS_HOSTS = frozenset({
-    "texastaxpayers.com", "governmentsalaries.com", "govsalaries.com",
-    "openpayrolls.com", "transparentcalifornia.com", "openthebooks.com",
-})
+# Public-records / salary databases — dropped from the feed regardless of the
+# model's verdict (see directory_hosts.py). Live case: a TRS "Highest Paid State
+# Employees" row mis-shown as Recognition.
+_PUBLIC_RECORDS_HOSTS = PUBLIC_RECORDS_HOSTS
 
 
 # How the article relates to THIS person. The feed shows only the two depths where
@@ -119,10 +115,13 @@ def _is_name_only_title(title: str, name: str) -> bool:
 
 def _is_press_worthy_link(host: str) -> bool:
     """A public_links host counts as a press mention only if it's neither a social
-    network nor a people-directory aggregator (those are profiles, not news)."""
+    network nor a people-directory aggregator (those are profiles, not news). Tests
+    the registrable domain too, so a broker sub-domain (app.getwarmer.com) can't slip
+    past an exact-host check."""
     if not host:
         return False
-    return host not in _SOCIAL_HOSTS and host not in _DIRECTORY_HOSTS
+    blocked = _SOCIAL_HOSTS | _DIRECTORY_HOSTS
+    return host not in blocked and registrable_host(host) not in blocked
 
 
 def news_items(claims: list[ClaimRow], name: str = "") -> list[ClaimRow]:
