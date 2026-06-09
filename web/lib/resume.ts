@@ -1,6 +1,7 @@
 import type { Claim, Person } from "./db";
 import { smartTitle } from "./normalize";
 import { groupEducation, type EducationGroup } from "./education";
+import { usefulLinks } from "./link-quality";
 
 export interface ExperienceEntry {
   title: string;
@@ -67,10 +68,11 @@ function normalizeEnd(raw: string | null): { end: string | null; current: boolea
   return { end: raw.trim(), current: false };
 }
 
+// Year-range separators seen across sources: hyphen, en-dash (–), em-dash (—).
 // career_history quote: "2018 - 2020 Senior Investment Manager @ Company"
-const QUOTE_RE = /^(now|present|\d{4})\s*[-–]\s*(now|present|\d{4})\s+(.*?)\s+@\s+(.+)$/i;
+const QUOTE_RE = /^(now|present|\d{4})\s*[-–—]\s*(now|present|\d{4})\s+(.*?)\s+@\s+(.+)$/i;
 // career_history value: "Title at Company (2018-2020)"
-const VALUE_RE = /^(.+?)\s+at\s+(.+?)\s*\((now|present|\d{4})\s*[-–]\s*(now|present|\d{4})\)\s*$/i;
+const VALUE_RE = /^(.+?)\s+at\s+(.+?)\s*\((now|present|\d{4})\s*[-–—]\s*(now|present|\d{4})\)\s*$/i;
 // "Title at Company (2019)" — single-year value form.
 const SINGLE_YEAR_RE = /^(.+?)\s+at\s+(.+?)\s*\((now|present|\d{4})\)\s*$/i;
 // "Title at Company" — dateless narrative form (a prose claim with no parsable
@@ -82,7 +84,7 @@ const ATONLY_RE = /^(.+?)\s+at\s+(.+)$/i;
 // descriptive one like "(Teacher Retirement System of Texas)".
 function stripYearParen(value: string): string {
   return value
-    .replace(/\s*\((?:19|20)\d{2}(?:\s*[-–]\s*(?:(?:19|20)\d{2}|present|now))?\)\s*$/i, "")
+    .replace(/\s*\((?:19|20)\d{2}(?:\s*[-–—]\s*(?:(?:19|20)\d{2}|present|now))?\)\s*$/i, "")
     .trim();
 }
 
@@ -154,7 +156,12 @@ function parseExperience(claim: Claim): ExperienceEntry {
 }
 
 function sortKey(e: ExperienceEntry): number {
-  if (e.current) return 9999;
+  // Current roles sort above all past roles; among multiple current roles, the
+  // most recently-started one ranks highest (so it wins as the displayed title).
+  if (e.current) {
+    const start = Number(e.start ?? 0);
+    return 9999 + (Number.isNaN(start) ? 0 : start);
+  }
   const year = Number(e.end ?? e.start ?? 0);
   return Number.isNaN(year) ? 0 : year;
 }
@@ -200,6 +207,73 @@ function dedupeExperience(entries: ExperienceEntry[]): ExperienceEntry[] {
     if (richer) best.set(key, e);
   }
   return order.map((k) => best.get(k)!);
+}
+
+// Two titles are the same role when one is a contiguous-token run of the other
+// ("Investment Banking Analyst" inside "Investment Banking Analyst in the FIG")
+// or they are identical after normalization.
+function titlesCompatible(a: string, b: string): boolean {
+  const na = normalizeText(a);
+  const nb = normalizeText(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const ta = na.split(" ");
+  const tb = nb.split(" ");
+  return isContiguousTokenRun(ta, tb) || isContiguousTokenRun(tb, ta);
+}
+
+// Two company strings refer to the same employer when one contains the other as
+// a substring after normalization ("citi" inside "citigroup in new york",
+// "berkshire partners" inside "berkshire partners lp").
+function companiesCompatible(a: string, b: string): boolean {
+  const na = normalizeText(a);
+  const nb = normalizeText(b);
+  if (!na || !nb) return false;
+  return na === nb || na.includes(nb) || nb.includes(na);
+}
+
+function dateSig(e: ExperienceEntry): string {
+  return `${e.start ?? ""}|${e.end ?? ""}|${e.current}`;
+}
+
+// Collapse two entries that are the SAME real role described by two sources with
+// different phrasing — same date range, compatible titles, compatible companies
+// (e.g. PDL's "Investment Banking Analyst @ Citi (2015-2017)" and Firecrawl's
+// "Investment Banking Analyst in the Financial Institutions Group @ Citigroup in
+// New York (2015-2017)"). Only DATED roles merge (start present), so a dateless
+// "Associate" never swallows a dateless "Senior Associate". The merged entry
+// keeps the more specific title, the cleaner (shorter) company, and the higher
+// confidence. Exact (title, company) dupes are already gone via dedupeExperience.
+function coalesceSameRole(entries: ExperienceEntry[]): ExperienceEntry[] {
+  const result: ExperienceEntry[] = [];
+  for (const e of entries) {
+    if (!e.start) {
+      result.push(e);
+      continue;
+    }
+    const i = result.findIndex(
+      (r) =>
+        Boolean(r.start) &&
+        dateSig(r) === dateSig(e) &&
+        titlesCompatible(r.title, e.title) &&
+        companiesCompatible(r.company, e.company)
+    );
+    if (i === -1) {
+      result.push(e);
+      continue;
+    }
+    const r = result[i];
+    result[i] = {
+      ...r,
+      title: e.title.length > r.title.length ? e.title : r.title,
+      company:
+        e.company.length < r.company.length && e.company
+          ? e.company
+          : r.company,
+      confidence: Math.max(r.confidence, e.confidence),
+    };
+  }
+  return result;
 }
 
 // Drop a dateless prose entry that has no parsed company but names — in its
@@ -301,6 +375,55 @@ function firstValue(claims: Claim[], type: string): Claim | undefined {
   return claims.find((c) => c.claim_type === type);
 }
 
+// Split an employer packed into the title ("Consultant at Boston Consulting Group")
+// into [title, employer] — but ONLY when no separate employer was captured. Splits
+// on the LAST " at " so titles like "Head of M&A at Apollo" resolve correctly, and
+// bails (keeps the title whole) if either side would be empty.
+export function splitTitleEmployer(
+  titleRaw: string | null,
+  employerRaw: string | null
+): [string | null, string | null] {
+  if (employerRaw && employerRaw.trim()) return [titleRaw, employerRaw];
+  if (!titleRaw) return [titleRaw, employerRaw];
+  const m = titleRaw.match(/^(.*\S)\s+at\s+(\S.*)$/i);
+  if (!m) return [titleRaw, employerRaw];
+  return [m[1].trim(), m[2].trim()];
+}
+
+function titleMatchesAny(title: string, entries: ExperienceEntry[]): boolean {
+  const t = normalizeText(title);
+  if (!t) return false;
+  return entries.some((e) => {
+    const et = normalizeText(e.title);
+    return Boolean(et) && (et === t || et.includes(t) || t.includes(et));
+  });
+}
+
+// Trust the dated timeline over a stale standalone current_title. Fires ONLY when
+// the current employer has a role marked current (present) AND the current_title
+// matches no role at that employer — the signature of a mismatched/stale title
+// (PDL/scrape lag) like "PhD Student" paired with employer "Facteus" while the
+// timeline shows "VP Marketing at Facteus, present". Otherwise the title is kept.
+export function reconcileCurrentTitle(
+  currentTitle: string | null,
+  currentEmployer: string | null,
+  history: ExperienceEntry[]
+): string | null {
+  if (!currentEmployer) return currentTitle;
+  const emp = normalizeText(currentEmployer);
+  if (!emp) return currentTitle;
+  const atEmployer = history.filter((e) => {
+    const co = normalizeText(e.company);
+    return Boolean(co) && (co === emp || co.includes(emp) || emp.includes(co));
+  });
+  const currentAtEmployer = atEmployer.filter((e) => e.current);
+  if (!currentAtEmployer.length) return currentTitle;
+  if (currentTitle && titleMatchesAny(currentTitle, atEmployer)) return currentTitle;
+  // Use the most-recent current role's title at this employer.
+  const best = currentAtEmployer.slice().sort((a, b) => sortKey(b) - sortKey(a))[0];
+  return best.title || currentTitle;
+}
+
 // The headline role lives in current_title / current_employer claims, separate
 // from career_history. Build it as a synthetic timeline entry so the person's
 // actual current job leads their experience — unless career_history already
@@ -384,26 +507,51 @@ export function buildResume(person: Person, claims: Claim[]): Resume {
 
   const currentTitleRaw = firstValue(verified, "current_title")?.value ?? null;
   const currentEmployerRaw = firstValue(verified, "current_employer")?.value ?? null;
-  const currentTitle = currentTitleRaw ? smartTitle(currentTitleRaw) : null;
-  const currentEmployer = currentEmployerRaw ? smartTitle(currentEmployerRaw) : null;
+  // When a source packs the employer into the title ("Consultant at Boston
+  // Consulting Group") and left the employer field empty, split it so the title
+  // and employer render cleanly. Only split when we have no employer already.
+  const [splitTitle, splitEmployer] = splitTitleEmployer(
+    currentTitleRaw,
+    currentEmployerRaw
+  );
+  const currentTitle = splitTitle ? smartTitle(splitTitle) : null;
+  const currentEmployer = splitEmployer ? smartTitle(splitEmployer) : null;
 
   const careerHistory = verified
     .filter((c) => c.claim_type === "career_history")
     .map(parseExperience);
 
-  const current = currentRoleEntry(verified, currentTitle, currentEmployer, careerHistory);
-  const combined = current ? [current, ...careerHistory] : careerHistory;
-  const experience = dropRedundantProse(dedupeExperience(combined)).sort(
-    (a, b) => sortKey(b) - sortKey(a)
+  // Reconcile a stale/mismatched current_title against the dated career history:
+  // when a CURRENT role at the current employer contradicts a current_title that
+  // matches no role there (e.g. PDL employer "Facteus" + a scraped "PhD Student"
+  // title, while the timeline shows "VP Marketing at Facteus, present"), trust the
+  // dated entry. Conservative: only fires on a present-dated role at that employer.
+  const reconciledTitle = reconcileCurrentTitle(
+    currentTitle,
+    currentEmployer,
+    careerHistory
   );
+
+  const current = currentRoleEntry(verified, reconciledTitle, currentEmployer, careerHistory);
+  const combined = current ? [current, ...careerHistory] : careerHistory;
+  const experience = dropRedundantProse(
+    coalesceSameRole(dedupeExperience(combined))
+  ).sort((a, b) => sortKey(b) - sortKey(a));
 
   const education = groupEducation(
     verified.filter((c) => c.claim_type === "education")
   );
 
-  const links: ResumeLink[] = verified
-    .filter((c) => c.claim_type === "public_links")
-    .map((c) => ({ label: c.value, url: c.source_url }));
+  // public_links is overloaded — genuine appearances plus data-broker pages,
+  // social noise, filings, and bare bio headings. Show only the useful ones
+  // (drops directories/brokers/boilerplate/name-only bios + the redundant
+  // LinkedIn, which is the header button). See lib/link-quality.ts.
+  const links: ResumeLink[] = usefulLinks(
+    verified
+      .filter((c) => c.claim_type === "public_links")
+      .map((c) => ({ label: c.value, url: c.source_url })),
+    person.full_name
+  );
 
   // Some enrichment runs leaked a boolean into the location field ("True").
   // Skip junk values so a real city (or the directory city) is used instead.
@@ -426,7 +574,7 @@ export function buildResume(person: Person, claims: Claim[]): Resume {
     : 0;
 
   return {
-    currentTitle,
+    currentTitle: reconciledTitle,
     currentEmployer,
     location,
     bio: firstValue(verified, "short_bio")?.value ?? null,

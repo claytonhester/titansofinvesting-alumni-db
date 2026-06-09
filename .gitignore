@@ -9,13 +9,20 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
-# Data — DB and caches are generated, not committed
+# Data — DB and caches are generated, not committed. *.db.bak* also covers
+# ad-hoc backups like titans.db.bak-before-wipe (which the bare *.db.bak misses)
+# — these hold the full scraped-PII corpus and must never be committed.
 pipeline/data/*.db
-pipeline/data/*.db.bak
+pipeline/data/*.db.bak*
 pipeline/data/*.db-journal
 pipeline/data/*.db-wal
 pipeline/data/*.db-shm
 pipeline/data/cache/
+
+# Ad-hoc run logs and probe output (scraped names/results; regenerated per run)
+pipeline/data/run_*.log
+pipeline/data/sonar_*.txt
+pipeline/data/people_search_run.txt
 
 # Runtime spend logs (append-only, regenerated at runtime)
 pipeline/data/cost_log.jsonl

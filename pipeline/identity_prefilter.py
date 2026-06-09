@@ -23,6 +23,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from directory_hosts import is_untrusted_identity_host
 from discovery import Source
 from enrichment_store import DECISION_ACCEPT
 from identity import AUTO_ACCEPT, IdentityVerdict, PersonAnchors
@@ -41,6 +42,24 @@ _STOPWORDS = frozenset(
         "capital", "management", "advisors", "advisers", "associates",
         "ventures", "fund", "the", "and", "of", "university", "college",
         "school", "institute",
+    }
+)
+
+# Geographic tokens that identify a place, not an institution. A school whose only
+# significant token is one of these ("University of Texas" -> "texas", "Texas A&M"
+# -> "texas") is named after its state/city: the token appears on any page about
+# that place, so it cannot anchor a slam dunk (this is how a Boston-University /
+# Morgan-Stanley namesake auto-accepted for a UT alum off a broker page echoing
+# "Dallas, Texas"). Distinctive school names ("Baylor", "Rice") are unaffected.
+# MAINTENANCE: this set is tuned for the Texas cohort (UT / A&M / Baylor). If the
+# roster expands to other regions, add the new state/city tokens for any school
+# named after its location (e.g. "california" for "University of California").
+_GEO_TOKENS = frozenset(
+    {
+        "texas", "austin", "houston", "dallas", "antonio", "san", "new", "york",
+        "california", "francisco", "los", "angeles", "chicago", "boston", "miami",
+        "national", "american", "america", "global", "united", "states", "usa",
+        "us", "north", "south", "east", "west", "international",
     }
 )
 
@@ -94,24 +113,62 @@ def _source_text(source: Source) -> str:
     return _normalize(" ".join((source.title, source.description, source.markdown)))
 
 
+def _has_distinctive_token(value: str) -> bool:
+    """True when an anchor carries at least one non-geographic identifying token —
+    i.e. it names an institution, not merely a place. Used to disqualify schools
+    named only after their state/city from carrying a slam dunk."""
+    return any(t not in _GEO_TOKENS for t in _significant_tokens(value))
+
+
+def _city_is_name_token(anchors: PersonAnchors) -> bool:
+    """True when the city is just a token of the person's OWN name — e.g. a person
+    named 'Austin' whose city is 'Austin'. Such a city is not an independent
+    anchor: any source mentioning the name trivially 'matches' the city, so it
+    must not count toward a slam dunk (this is how a namesake SEC report for a
+    Utah advisor passed for a UT alum named Austin)."""
+    city_tokens = _normalize(anchors.city).split()
+    if not city_tokens:
+        return False
+    name_tokens = set(_normalize(anchors.full_name).split())
+    return all(tok in name_tokens for tok in city_tokens)
+
+
+def _company_is_school_placeholder(anchors: PersonAnchors) -> bool:
+    """True when the roster 'company' is really the school name used as a
+    placeholder (no real employer on record), e.g. company='University of Texas'
+    and school='University of Texas'. Then company is NOT an independent employer
+    anchor — it collapses the slam dunk to name + a single school token, which is
+    far too weak to auto-accept a common name."""
+    company_tokens = set(_significant_tokens(anchors.company))
+    school_tokens = set(_significant_tokens(anchors.school))
+    return bool(company_tokens) and company_tokens == school_tokens
+
+
 def _matched_anchors(anchors: PersonAnchors, text: str) -> list[str]:
-    """Which directory anchors this source's text corroborates."""
+    """Which directory anchors this source's text corroborates. The city anchor is
+    suppressed when it is merely a token of the person's name (see above)."""
     matched: list[str] = []
     if _phrase_present(anchors.full_name, text):
         matched.append("name")
     if _all_tokens_present(anchors.company, text):
         matched.append("company")
-    if _phrase_present(anchors.city, text):
+    if not _city_is_name_token(anchors) and _phrase_present(anchors.city, text):
         matched.append("city")
-    if _all_tokens_present(anchors.school, text):
+    if _has_distinctive_token(anchors.school) and _all_tokens_present(
+        anchors.school, text
+    ):
         matched.append("school")
     return matched
 
 
-def _is_slam_dunk(matched: list[str]) -> bool:
+def _is_slam_dunk(matched: list[str], *, company_is_placeholder: bool) -> bool:
     """Auto-accept only on an overwhelming multi-anchor match: the exact full name
-    AND the company AND at least one secondary anchor (city or school). One or two
-    weak signals are NOT enough — those go to Sonnet."""
+    AND a REAL company AND at least one secondary anchor (city or school). A
+    company that is just the school placeholder is not a real employer anchor, so
+    it cannot carry the accept — those people go to Sonnet. One or two weak
+    signals are NOT enough."""
+    if company_is_placeholder:
+        return False
     has_secondary = "city" in matched or "school" in matched
     return "name" in matched and "company" in matched and has_secondary
 
@@ -124,9 +181,16 @@ def prefilter(
     ambiguous and the behaviour is identical to having no pre-filter."""
     decided: list[IdentityVerdict] = []
     ambiguous: list[Source] = []
+    company_is_placeholder = _company_is_school_placeholder(anchors)
     for source in sources:
+        # Data-broker / aggregator / social hosts echo the query anchors in their
+        # boilerplate, so a token match there is not evidence about the real person.
+        # Never auto-accept them — route to the semantic Sonnet gate.
+        if is_untrusted_identity_host(source.url):
+            ambiguous.append(source)
+            continue
         matched = _matched_anchors(anchors, _source_text(source))
-        if _is_slam_dunk(matched):
+        if _is_slam_dunk(matched, company_is_placeholder=company_is_placeholder):
             decided.append(
                 IdentityVerdict(
                     source_url=source.url,
