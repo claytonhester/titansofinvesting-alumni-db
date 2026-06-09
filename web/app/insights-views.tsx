@@ -343,9 +343,16 @@ export default function InsightsViews(props: InsightsViewsProps) {
           <div className="panel col-12">
             <div className="insight-synthesis-head">
               <h3>Where they are</h3>
-              <span className="col-tag">measured</span>
+              <span className="col-tag">current location · measured</span>
             </div>
-            <Bars rows={geoRows} />
+            {geoRows.length > 0 ? (
+              <Bars rows={geoRows} />
+            ) : (
+              <EmptyState
+                title="No current locations yet"
+                note="Where alumni live now is collected during enrichment — not assumed from their program-era city. This map fills in as people are enriched."
+              />
+            )}
           </div>
         )}
       </div>

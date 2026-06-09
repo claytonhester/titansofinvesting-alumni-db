@@ -511,24 +511,20 @@ export function geoSpread(limit = 8): GeoSpread[] {
     .all(limit) as GeoSpread[];
 }
 
-// Map view: prefer each person's CURRENT location (an enriched `location` claim)
-// and fall back to the program-era roster city when they aren't enriched yet, so
-// "where they are" reflects where alumni live now rather than where they started.
-// City buckets are normalized to the segment before the first comma so an
-// enriched "Austin, TX" and a roster "Austin" tally together.
+// Map view: each person's CURRENT location, from the enriched `location` claim
+// only. We deliberately do NOT fall back to the program-era roster city — that's
+// where they *were*, not where they *are*, and showing it would assert a current
+// location we haven't verified. So this is empty until enrichment runs, and the
+// Map renders an empty state. City buckets are normalized to the segment before
+// the first comma so "Austin, TX" and "Austin" tally together.
 export function currentGeoSpread(limit = 8): GeoSpread[] {
   const rows = db()
     .prepare(
-      `SELECT COALESCE(NULLIF(TRIM(loc.value), ''), p.city) AS raw
-       FROM people p
-       LEFT JOIN (
-         SELECT person_id, MIN(value) AS value
-         FROM claims
-         WHERE claim_type = 'location' AND TRIM(value) <> ''
-         GROUP BY person_id
-       ) loc ON loc.person_id = p.id`
+      `SELECT TRIM(value) AS raw
+       FROM claims
+       WHERE claim_type = 'location' AND TRIM(value) <> ''`
     )
-    .all() as { raw: string | null }[];
+    .all() as { raw: string }[];
 
   const tally = new Map<string, number>();
   for (const { raw } of rows) {
@@ -591,6 +587,51 @@ export function newsCount(): number {
     .prepare(`SELECT COUNT(*) AS n FROM claims WHERE claim_type = 'news_mention'`)
     .get() as { n: number };
   return row.n;
+}
+
+// The CURATED news feed: the Haiku news agent's category + summary + importance
+// per article, joined back to the person. This is what the "In the news" tab
+// reads — never the raw, uncategorized news_mention claims. Guarded: returns []
+// when the news_curated table doesn't exist yet (pre-first-run).
+export interface CuratedNewsRow {
+  name_slug: string;
+  full_name: string;
+  school: string;
+  titan_class: number;
+  headline: string;
+  summary: string;
+  category: string;
+  date: string;
+  source_url: string;
+  source_host: string;
+  importance: number;
+}
+
+export function curatedNews(limit = 40): CuratedNewsRow[] {
+  try {
+    return db()
+      .prepare(
+        `SELECT p.name_slug, p.full_name, p.school, p.titan_class,
+                n.headline, n.summary, n.category, n.date,
+                n.source_url, n.source_host, n.importance
+         FROM news_curated n JOIN people p ON p.id = n.person_id
+         ORDER BY n.importance DESC, n.date DESC LIMIT ?`
+      )
+      .all(limit) as CuratedNewsRow[];
+  } catch {
+    return [];
+  }
+}
+
+export function curatedNewsCount(): number {
+  try {
+    const row = db()
+      .prepare(`SELECT COUNT(*) AS n FROM news_curated`)
+      .get() as { n: number };
+    return row.n;
+  } catch {
+    return 0;
+  }
 }
 
 export interface Claim {

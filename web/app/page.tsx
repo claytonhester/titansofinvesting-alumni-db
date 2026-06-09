@@ -5,7 +5,7 @@ import {
   listPeople,
   listSchools,
   recentlyEnriched,
-  newsCount,
+  curatedNewsCount,
 } from "@/lib/db";
 import { getNewsFeed } from "@/lib/news";
 import { getAlumniInsights } from "@/lib/insights";
@@ -49,7 +49,7 @@ export default async function Home({
   const enriched = recentlyEnriched(6);
   const insights = getAlumniInsights();
   const newsFeed = getNewsFeed(40);
-  const newsTotal = newsCount();
+  const newsTotal = curatedNewsCount();
   const people = listPeople({
     q: q || undefined,
     school: school || undefined,
@@ -86,7 +86,7 @@ export default async function Home({
             {
               key: "news",
               label: "In the news",
-              badge: newsFeed.isSample ? newsFeed.items.length : newsTotal,
+              badge: newsTotal,
             },
             { key: "build", label: "Build Status" },
           ]}
@@ -208,7 +208,7 @@ export default async function Home({
             ),
             news: (
         <section className="section">
-          <NewsFeed items={newsFeed.items} isSample={newsFeed.isSample} />
+          <NewsFeed items={newsFeed.items} />
         </section>
             ),
           }}
