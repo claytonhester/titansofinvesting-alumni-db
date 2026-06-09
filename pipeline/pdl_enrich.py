@@ -283,7 +283,11 @@ def _experience_claim(entry: object, source_url: str, confidence: float) -> Clai
 
 def _education_claim(entry: object, source_url: str, confidence: float) -> ClaimRow | None:
     """Build an education claim as "{degree} from {institution}" (resume.ts splits
-    on ' from '); fall back to the institution alone when no degree is present."""
+    on ' from '); fall back to the institution alone when no degree is present.
+
+    The graduation (end) year, when PDL has it, goes in the quote — keeping the
+    display value clean while giving grad_year derivation a VERIFIED year for
+    matched people instead of the school-aware class-map guess."""
     if not isinstance(entry, dict):
         return None
     institution = _clean(_nested(entry.get("school"), "name"))
@@ -292,7 +296,9 @@ def _education_claim(entry: object, source_url: str, confidence: float) -> Claim
     degrees = entry.get("degrees") or []
     degree = _clean(degrees[0]) if degrees and isinstance(degrees[0], str) else ""
     value = f"{degree} from {institution}" if degree else institution
-    return _claim("education", value, source_url, "", confidence)
+    end_year = _year(entry.get("end_date"))
+    quote = f"Graduated {end_year}" if end_year else ""
+    return _claim("education", value, source_url, quote, confidence)
 
 
 def _public_links(data: dict) -> list[tuple[str, str]]:
