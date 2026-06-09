@@ -303,12 +303,19 @@ def enrich_person(
     # PDL deepens the verified résumé (canonical claim_types, identity-gated on
     # likelihood). Skips cleanly when its key is unset and never raises, so a
     # missing key or an outage degrades enrichment instead of aborting it.
+    #
+    # Anchor on the VERIFIED current employer when we have one, not the roster's
+    # initial_company — for an older class the roster company is ~15-20 years stale
+    # and matches PDL's current record poorly (the likely cause of low match rate).
+    # Falls back to the roster company for thin/empty profiles where structuring
+    # produced no employer.
+    pdl_company = _verified_employer or person.company
     pdl = (
         enrich_pdl(
             http,
             pdl_key,
             person.full_name,
-            person.company,
+            pdl_company,
             person.city,
             cost_usd_per_match=PDL_USD_PER_MATCH,
         )
