@@ -80,14 +80,24 @@ class Source:
     relevance: float
 
 
+# Firecrawl bills SEARCH too — measured at ~2 credits per search call (a query at
+# limit 4 returned 4 results for 2 credits). The old model assumed search was free
+# and counted only scrapes, which under-reported per-person cost by ~10x on thin
+# profiles. Scrapes are 1 credit each. The authoritative dollar figure still comes
+# from the live get_credit_usage() delta in the cost log; this constant only makes
+# the per-person estimate honest.
+SEARCH_CREDITS_PER_CALL = 2
+SCRAPE_CREDITS_PER_PAGE = 1
+
+
 @dataclass(frozen=True)
 class DiscoveryResult:
     """Everything one person's discovery produced, plus the real credit cost.
 
-    `credits_spent` is the number of pages we actually SCRAPED (one Firecrawl
-    credit each) — the dominant, controllable cost. Search calls are cheap and
-    not counted here; the authoritative dollar figure comes from the live
-    get_credit_usage() delta recorded by the cost log."""
+    `credits_spent` estimates total Firecrawl credits for this pass: every search
+    call (`SEARCH_CREDITS_PER_CALL`) plus every page scraped (`SCRAPE_CREDITS_PER_PAGE`).
+    Retries can push the true figure slightly higher; the authoritative dollar
+    figure comes from the live get_credit_usage() delta recorded by the cost log."""
 
     full_name: str
     sources: tuple[Source, ...]
@@ -286,7 +296,8 @@ def discover_news(
     keepers = sorted(by_domain.values(), key=lambda c: c.relevance, reverse=True)[:max_articles]
 
     sources: list[Source] = []
-    credits_spent = 0
+    # Search is billed even when it only returns metadata (see SEARCH_CREDITS_PER_CALL).
+    credits_spent = len(queries) * SEARCH_CREDITS_PER_CALL
     for cand in keepers:
         try:
             markdown = _scrape_with_retry(client, cand.url, backoff_base)
@@ -340,9 +351,10 @@ def discover(
 
     keepers = sorted(by_domain.values(), key=lambda c: c.relevance, reverse=True)[:max_sources]
 
-    # Phase B — pay only for the keepers: scrape each top candidate once.
+    # Phase B — pay only for the keepers: scrape each top candidate once. The
+    # search calls above were already billed (SEARCH_CREDITS_PER_CALL each).
     sources: list[Source] = []
-    credits_spent = 0
+    credits_spent = len(queries) * SEARCH_CREDITS_PER_CALL
     for cand in keepers:
         try:
             markdown = _scrape_with_retry(client, cand.url, backoff_base)

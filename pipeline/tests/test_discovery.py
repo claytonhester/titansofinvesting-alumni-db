@@ -13,12 +13,18 @@ from __future__ import annotations
 import pytest
 
 from discovery import (
+    SEARCH_CREDITS_PER_CALL,
     Source,
     _as_candidate,
     _domain,
+    build_queries,
     discover,
 )
 from firecrawl.v2.types import SearchResultWeb
+
+# discover() bills every search call plus every scrape. The query set is fixed, so
+# the search portion is constant; tests assert SEARCH + scrapes.
+_SEARCH_COST = len(build_queries("n", "c", "ci")) * SEARCH_CREDITS_PER_CALL
 
 
 class _FakeWebResults:
@@ -83,7 +89,7 @@ def test_discover_dedupes_by_domain_keeping_best_relevance() -> None:
     client = _FakeFirecrawl(hits)
     result = discover(client, "Jane Doe", "Acme", "Austin")
     assert len(result.sources) == 1
-    assert result.credits_spent == 1
+    assert result.credits_spent == _SEARCH_COST + 1
     assert len(client.scraped) == 1
 
 
@@ -93,7 +99,7 @@ def test_discover_scrapes_only_top_max_sources() -> None:
     hits = [_hit(f"https://site{i}.com/jane") for i in range(12)]
     client = _FakeFirecrawl(hits)
     result = discover(client, "Jane Doe", "Acme", "Austin", max_sources=3)
-    assert result.credits_spent == 3
+    assert result.credits_spent == _SEARCH_COST + 3
     assert len(client.scraped) == 3
     assert len(result.sources) == 3
 
@@ -104,6 +110,6 @@ def test_discover_bills_empty_scrape_but_drops_source() -> None:
     hits = [_hit("https://site1.com/jane"), _hit("https://site2.com/jane")]
     client = _FakeFirecrawl(hits, markdown_for=lambda url: "" if "site1" in url else "body")
     result = discover(client, "Jane Doe", "Acme", "Austin")
-    assert result.credits_spent == 2
+    assert result.credits_spent == _SEARCH_COST + 2
     assert len(result.sources) == 1
     assert all(isinstance(s, Source) for s in result.sources)

@@ -8,7 +8,10 @@ from firecrawl.v2.utils.error_handler import PaymentRequiredError
 
 from enrichment_store import ClaimRow
 from linkedin_firecrawl import (
+    DEFAULT_MAX_CREDITS,
     EXTRACTION_METHOD,
+    LinkedInBudget,
+    agent_batch_budget,
     build_prompt,
     fetch_linkedin,
     map_claims,
@@ -146,3 +149,49 @@ def test_fetch_other_error_returns_empty():
 def test_fetch_empty_name_skips():
     res = fetch_linkedin(_Client(), "   ")
     assert res.claim_rows == ()
+
+
+# --- LinkedInBudget: the run-level hard cap + skip gate -----------------------
+
+def _thin_profile():
+    """Missing education + < 3 roles -> profile_needs_linkedin() is True."""
+    return [_c("current_employer", "Acme"), _c("career_history", "Analyst at Acme")]
+
+
+def test_budget_skips_complete_profile():
+    d = LinkedInBudget(1000).decide(_rich_profile(), trusted_count=5)
+    assert d.fire is False and d.reason == "profile already complete"
+
+
+def test_budget_skips_ghost_with_no_verified_sources():
+    """A thin profile with zero identity-verified sources is a ghost — firing the
+    name-based agent there almost always finds nothing, so skip it."""
+    d = LinkedInBudget(1000).decide(_thin_profile(), trusted_count=0)
+    assert d.fire is False and d.reason == "no verified web presence"
+
+
+def test_budget_fires_thin_profile_with_presence():
+    d = LinkedInBudget(1000).decide(_thin_profile(), trusted_count=1)
+    assert d.fire is True
+
+
+def test_budget_blocks_once_spent():
+    b = LinkedInBudget(50)
+    assert b.decide(_thin_profile(), trusted_count=1).fire is True
+    b.charge(60)  # a spiking call overshoots the remaining budget
+    assert b.remaining == 0
+    d = b.decide(_thin_profile(), trusted_count=1)
+    assert d.fire is False and d.reason == "batch LinkedIn budget spent"
+
+
+def test_budget_min_verified_sources_is_tunable():
+    """Cranking the bar to 2 skips single-source profiles (more aggressive)."""
+    b = LinkedInBudget(1000, min_verified_sources=2)
+    assert b.decide(_thin_profile(), trusted_count=1).fire is False
+    assert b.decide(_thin_profile(), trusted_count=2).fire is True
+
+
+def test_agent_batch_budget_scales_but_floors_at_one_firing():
+    assert agent_batch_budget(1) >= DEFAULT_MAX_CREDITS      # single run can fire once
+    assert agent_batch_budget(100) == 15 * 100               # scales with batch size
+    assert agent_batch_budget(0) >= DEFAULT_MAX_CREDITS      # never negative/zero
