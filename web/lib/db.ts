@@ -437,6 +437,51 @@ export function sectorBreakdown(): SectorBreakdown[] {
     .sort((a, b) => b.count - a.count);
 }
 
+// VERIFIED first-employer views. The roster's `initial_company` is the
+// program-era listing, not a confirmed first post-grad employer (and is often
+// not a first job at all — current ventures, "Texas A&M" for students). So
+// "Where they start" reads the first_employer the pipeline resolves during
+// enrichment instead. Empty until people are classified; the person_insights
+// table may not exist yet, so both are guarded and return [] rather than throw.
+export function firstEmployerFirms(limit = 8): FirmBreakdown[] {
+  try {
+    return db()
+      .prepare(
+        `SELECT first_employer AS company, COUNT(*) AS count
+         FROM person_insights
+         WHERE TRIM(first_employer) <> ''
+         GROUP BY first_employer ORDER BY count DESC LIMIT ?`
+      )
+      .all(limit) as FirmBreakdown[];
+  } catch {
+    return [];
+  }
+}
+
+export function firstEmployerSectors(): SectorBreakdown[] {
+  let rows: FirmBreakdown[];
+  try {
+    rows = db()
+      .prepare(
+        `SELECT first_employer AS company, COUNT(*) AS count
+         FROM person_insights
+         WHERE TRIM(first_employer) <> ''
+         GROUP BY first_employer`
+      )
+      .all() as FirmBreakdown[];
+  } catch {
+    return [];
+  }
+  const tally = new Map<string, number>();
+  for (const { company, count } of rows) {
+    const sector = classifySector(company);
+    tally.set(sector, (tally.get(sector) ?? 0) + count);
+  }
+  return [...tally.entries()]
+    .map(([sector, count]) => ({ sector, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
 export interface ClassSpread {
   titan_class: number;
   count: number;

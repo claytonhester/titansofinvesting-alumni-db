@@ -1,8 +1,8 @@
 import {
-  topFirms,
+  firstEmployerFirms,
+  firstEmployerSectors,
   currentGeoSpread,
   schoolBreakdown,
-  sectorBreakdown,
   latestInsightsSnapshot,
   type FirmBreakdown,
   type GeoSpread,
@@ -18,14 +18,17 @@ import {
 // they LAND and how far they climb.
 //
 // ALWAYS MEASURED — computed live from the fully-populated `people` roster:
-//   startFirms (initial_company), geoSpread, schoolSpread, measuredSectors.
-// MEASURED WHEN ENRICHED — read from the pipeline's insights_snapshot once any
-// alumnus has been enriched; EMPTY (no mock data) until then so the UI renders
-// honest empty states rather than seeded numbers:
-//   narrative, landingFirms, seniority ladder, currentTitles, signatureStats.
+//   schoolSpread (we genuinely know each alum's school).
+// MEASURED WHEN ENRICHED — empty (no mock) until the pipeline has data:
+//   startFirms + measuredSectors come from the VERIFIED first_employer the
+//   pipeline resolves (NOT the roster's program-era initial_company, which we
+//   don't trust as a real first post-grad employer); geoSpread prefers the
+//   enriched current location; narrative / landingFirms / seniority /
+//   currentTitles / signatureStats read the insights_snapshot.
 //
 // `hasOutcomeData` is false until the snapshot reports at least one enriched
-// person; the view uses it to switch between empty states and real numbers.
+// person; the view uses it (plus per-list emptiness) to switch between empty
+// states and real numbers.
 
 export interface FirmCount {
   company: string;
@@ -75,7 +78,8 @@ export function getAlumniInsights(): AlumniInsights {
   const schoolSpread = schoolBreakdown();
   const total = schoolSpread.reduce((sum, s) => sum + s.count, 0);
 
-  const allSectors = sectorBreakdown();
+  // First-job sectors from the VERIFIED first employer (empty until enriched).
+  const allSectors = firstEmployerSectors();
   const named = allSectors.filter((s) => s.sector !== SECTOR_CATCHALL);
   const catchAll = allSectors.filter((s) => s.sector === SECTOR_CATCHALL);
   const measuredSectors = [...named, ...catchAll];
@@ -87,7 +91,7 @@ export function getAlumniInsights(): AlumniInsights {
   const hasOutcomeData = !!snapshot && snapshot.enriched_count > 0;
 
   return {
-    startFirms: topFirms(8),
+    startFirms: firstEmployerFirms(8),
     geoSpread: currentGeoSpread(8),
     schoolSpread,
     measuredSectors,
