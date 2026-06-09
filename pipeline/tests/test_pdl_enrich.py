@@ -27,6 +27,15 @@ def _full_record() -> dict:
             "job_company_name": "Apex Capital",
             "location_name": "Austin, Texas",
             "linkedin_url": "linkedin.com/in/jane-doe",
+            "job_company_industry": "investment management",
+            "job_company_size": "1001-5000",
+            "job_title_role": "finance",
+            "job_title_levels": ["director", "partner"],
+            "job_start_date": "2018-04",
+            "inferred_years_experience": 14,
+            "linkedin_connections": 832,
+            "skills": ["Private Equity", "Valuation", "private equity", "LBO"],
+            "certifications": ["CFA", {"name": "CPA"}],
             "experience": [
                 {
                     "title": {"name": "Managing Director"},
@@ -83,6 +92,47 @@ def test_confident_match_maps_canonical_claims() -> None:
     link_urls = {r.source_url for r in by_type["public_links"]}
     assert "https://linkedin.com/in/jane-doe" in link_urls
     assert "https://twitter.com/janedoe" in link_urls
+
+
+@pytest.mark.unit
+def test_extracts_skills_and_certifications_as_claims() -> None:
+    client = _client(lambda req: httpx.Response(200, json=_full_record()))
+    result = enrich_pdl(
+        client, "key", "Jane Doe", "Apex Capital", "Austin",
+        cost_usd_per_match=_PER_MATCH,
+    )
+    skills = [r.value for r in result.claim_rows if r.claim_type == "skill"]
+    certs = [r.value for r in result.claim_rows if r.claim_type == "certification"]
+    # case-insensitive de-dup keeps "Private Equity", drops "private equity"
+    assert skills == ["Private Equity", "Valuation", "LBO"]
+    assert certs == ["CFA", "CPA"]  # string and {name:...} forms both handled
+
+
+@pytest.mark.unit
+def test_extracts_profile_attributes() -> None:
+    client = _client(lambda req: httpx.Response(200, json=_full_record()))
+    attrs = enrich_pdl(
+        client, "key", "Jane Doe", "Apex Capital", "Austin",
+        cost_usd_per_match=_PER_MATCH,
+    ).attributes
+    assert attrs.current_industry == "investment management"
+    assert attrs.current_company_size == "1001-5000"
+    assert attrs.job_function == "finance"
+    assert attrs.pdl_seniority == "director, partner"
+    assert attrs.current_role_start_year == 2018
+    assert attrs.years_experience == 14
+    assert attrs.linkedin_connections == 832
+
+
+@pytest.mark.unit
+def test_attributes_default_empty_when_absent() -> None:
+    record = {"likelihood": 9, "data": {"job_title": "Analyst"}}
+    client = _client(lambda req: httpx.Response(200, json=record))
+    attrs = enrich_pdl(
+        client, "key", "Jane Doe", "", "", cost_usd_per_match=_PER_MATCH,
+    ).attributes
+    assert attrs.current_industry == "" and attrs.years_experience is None
+    assert attrs.current_role_start_year is None
 
 
 @pytest.mark.unit

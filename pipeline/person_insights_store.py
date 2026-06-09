@@ -36,6 +36,21 @@ CREATE TABLE IF NOT EXISTS person_insights (
     founder_partner   INTEGER NOT NULL DEFAULT 0,
     still_first_firm  INTEGER NOT NULL DEFAULT 0,
     started_sell_side INTEGER NOT NULL DEFAULT 0,
+    -- Collected from the PDL match (already paid for); empty/NULL when absent.
+    current_industry        TEXT,
+    current_company_size    TEXT,
+    job_function            TEXT,
+    pdl_seniority           TEXT,
+    current_role_start_year INTEGER,
+    years_experience        INTEGER,
+    linkedin_connections    INTEGER,
+    -- Derived metrics (computed from claims + grad_year).
+    tenure_years        INTEGER,
+    years_to_md         INTEGER,
+    num_employers       INTEGER,
+    has_advanced_degree INTEGER NOT NULL DEFAULT 0,
+    current_sector      TEXT,
+    left_texas          INTEGER,           -- 1 / 0 / NULL (unknown)
     model             TEXT    NOT NULL DEFAULT '',
     classified_at    TEXT    NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (person_id) REFERENCES people (id)
@@ -54,6 +69,21 @@ class PersonInsight:
     founder_partner: bool
     still_first_firm: bool
     started_sell_side: bool = False
+    # Collected (PDL).
+    current_industry: str = ""
+    current_company_size: str = ""
+    job_function: str = ""
+    pdl_seniority: str = ""
+    current_role_start_year: int | None = None
+    years_experience: int | None = None
+    linkedin_connections: int | None = None
+    # Derived.
+    tenure_years: int | None = None
+    years_to_md: int | None = None
+    num_employers: int | None = None
+    has_advanced_degree: bool = False
+    current_sector: str = ""
+    left_texas: bool | None = None
     model: str = ""
 
 
@@ -69,21 +99,40 @@ def upsert_person_insight(conn: sqlite3.Connection, row: PersonInsight) -> None:
         INSERT INTO person_insights (
             person_id, grad_year, grad_year_source, first_employer,
             on_buy_side, reached_md, founder_partner, still_first_firm,
-            started_sell_side, model, classified_at
+            started_sell_side, current_industry, current_company_size,
+            job_function, pdl_seniority, current_role_start_year,
+            years_experience, linkedin_connections, tenure_years, years_to_md,
+            num_employers, has_advanced_degree, current_sector, left_texas,
+            model, classified_at
         ) VALUES (
-            :pid, :gy, :gys, :fe, :bs, :md, :fp, :sff, :sss, :model, datetime('now')
+            :pid, :gy, :gys, :fe, :bs, :md, :fp, :sff, :sss, :ind, :size,
+            :func, :sen, :rsy, :yexp, :conn, :ten, :ytm, :nemp, :adv, :sec,
+            :ltx, :model, datetime('now')
         )
         ON CONFLICT (person_id) DO UPDATE SET
-            grad_year         = excluded.grad_year,
-            grad_year_source  = excluded.grad_year_source,
-            first_employer    = excluded.first_employer,
-            on_buy_side       = excluded.on_buy_side,
-            reached_md        = excluded.reached_md,
-            founder_partner   = excluded.founder_partner,
-            still_first_firm  = excluded.still_first_firm,
-            started_sell_side = excluded.started_sell_side,
-            model             = excluded.model,
-            classified_at     = datetime('now')
+            grad_year               = excluded.grad_year,
+            grad_year_source        = excluded.grad_year_source,
+            first_employer          = excluded.first_employer,
+            on_buy_side             = excluded.on_buy_side,
+            reached_md              = excluded.reached_md,
+            founder_partner         = excluded.founder_partner,
+            still_first_firm        = excluded.still_first_firm,
+            started_sell_side       = excluded.started_sell_side,
+            current_industry        = excluded.current_industry,
+            current_company_size    = excluded.current_company_size,
+            job_function            = excluded.job_function,
+            pdl_seniority           = excluded.pdl_seniority,
+            current_role_start_year = excluded.current_role_start_year,
+            years_experience        = excluded.years_experience,
+            linkedin_connections    = excluded.linkedin_connections,
+            tenure_years            = excluded.tenure_years,
+            years_to_md             = excluded.years_to_md,
+            num_employers           = excluded.num_employers,
+            has_advanced_degree     = excluded.has_advanced_degree,
+            current_sector          = excluded.current_sector,
+            left_texas              = excluded.left_texas,
+            model                   = excluded.model,
+            classified_at           = datetime('now')
         """,
         {
             "pid": row.person_id,
@@ -95,12 +144,26 @@ def upsert_person_insight(conn: sqlite3.Connection, row: PersonInsight) -> None:
             "fp": 1 if row.founder_partner else 0,
             "sff": 1 if row.still_first_firm else 0,
             "sss": 1 if row.started_sell_side else 0,
+            "ind": row.current_industry,
+            "size": row.current_company_size,
+            "func": row.job_function,
+            "sen": row.pdl_seniority,
+            "rsy": row.current_role_start_year,
+            "yexp": row.years_experience,
+            "conn": row.linkedin_connections,
+            "ten": row.tenure_years,
+            "ytm": row.years_to_md,
+            "nemp": row.num_employers,
+            "adv": 1 if row.has_advanced_degree else 0,
+            "sec": row.current_sector,
+            "ltx": None if row.left_texas is None else (1 if row.left_texas else 0),
             "model": row.model,
         },
     )
 
 
 def _to_insight(row: sqlite3.Row) -> PersonInsight:
+    lt = row["left_texas"]
     return PersonInsight(
         person_id=row["person_id"],
         grad_year=row["grad_year"],
@@ -111,6 +174,19 @@ def _to_insight(row: sqlite3.Row) -> PersonInsight:
         founder_partner=bool(row["founder_partner"]),
         still_first_firm=bool(row["still_first_firm"]),
         started_sell_side=bool(row["started_sell_side"]),
+        current_industry=row["current_industry"] or "",
+        current_company_size=row["current_company_size"] or "",
+        job_function=row["job_function"] or "",
+        pdl_seniority=row["pdl_seniority"] or "",
+        current_role_start_year=row["current_role_start_year"],
+        years_experience=row["years_experience"],
+        linkedin_connections=row["linkedin_connections"],
+        tenure_years=row["tenure_years"],
+        years_to_md=row["years_to_md"],
+        num_employers=row["num_employers"],
+        has_advanced_degree=bool(row["has_advanced_degree"]),
+        current_sector=row["current_sector"] or "",
+        left_texas=None if lt is None else bool(lt),
         model=row["model"],
     )
 

@@ -1,10 +1,12 @@
 import {
   firstEmployerFirms,
   firstEmployerSectors,
+  firmClusters,
   currentGeoSpread,
   schoolBreakdown,
   latestInsightsSnapshot,
   type FirmBreakdown,
+  type FirmCluster,
   type GeoSpread,
   type SchoolBreakdown,
   type SectorBreakdown,
@@ -63,9 +65,11 @@ export interface AlumniInsights {
   // at least one enriched person. No mock fallback.
   narrative: string;
   landingFirms: FirmCount[];
+  landingSectors: SectorBreakdown[];
   seniority: SeniorityTier[];
   currentTitles: CurrentTitle[];
   signatureStats: SignatureStat[];
+  clusters: FirmCluster[];
   // True once a real snapshot reports enriched alumni; drives empty states.
   hasOutcomeData: boolean;
 }
@@ -98,9 +102,11 @@ export function getAlumniInsights(): AlumniInsights {
     total,
     narrative: hasOutcomeData ? snapshot!.narrative : "",
     landingFirms: hasOutcomeData ? snapshot!.landing_firms : [],
+    landingSectors: hasOutcomeData ? snapshot!.landing_sectors : [],
     seniority: hasOutcomeData ? snapshot!.seniority : [],
     currentTitles: hasOutcomeData ? snapshot!.current_titles : [],
     signatureStats: hasOutcomeData ? snapshot!.signature_stats : [],
+    clusters: firmClusters(8),
     hasOutcomeData,
   };
 }

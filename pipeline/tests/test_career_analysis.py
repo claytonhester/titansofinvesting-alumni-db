@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from career_analysis import (
     first_post_grad_employer,
+    num_employers,
     parse_career_entry,
+    tenure_years,
+    years_to_md,
 )
 from enrichment_store import ClaimRow
 
@@ -76,3 +79,38 @@ def test_first_employer_empty_when_no_company():
 def test_no_career_claims_returns_empty():
     claims = [ClaimRow("current_title", "CEO", "", "", 0.9, "pdl")]
     assert first_post_grad_employer(claims, grad_year=2010) == ""
+
+
+def test_num_employers_distinct():
+    claims = [
+        _career("Analyst at Goldman (2010-2014)"),
+        _career("VP at Goldman (2014-2016)"),  # same firm string -> deduped
+        _career("MD at Citadel (2016-present)"),
+    ]
+    assert num_employers(claims) == 2
+
+
+def test_years_to_md_from_grad():
+    claims = [
+        _career("Analyst at Goldman (2010-2014)"),
+        _career("Managing Director at Citadel (2018-present)"),
+    ]
+    assert years_to_md(claims, grad_year=2010) == 8
+
+
+def test_years_to_md_none_without_md_or_grad():
+    claims = [_career("Analyst at Goldman (2010-2014)")]
+    assert years_to_md(claims, grad_year=2010) is None      # no MD role
+    md = [_career("Managing Director at X (2018-present)")]
+    assert years_to_md(md, grad_year=None) is None          # no grad year
+
+
+def test_years_to_md_clamped_nonnegative():
+    claims = [_career("Partner at X (2008-present)")]  # 'partner' is MD+ tier
+    assert years_to_md(claims, grad_year=2010) == 0   # senior before grad -> 0
+
+
+def test_tenure_years():
+    assert tenure_years(2018, 2026) == 8
+    assert tenure_years(None, 2026) is None
+    assert tenure_years(2030, 2026) == 0  # clamped

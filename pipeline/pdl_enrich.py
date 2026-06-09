@@ -32,9 +32,32 @@ from enrichment_store import ClaimRow
 PDL_ENRICH_URL = "https://api.peopledatalabs.com/v5/person/enrich"
 EXTRACTION_METHOD = "pdl"
 
+# Skills are noisy and long-tailed; keep the most relevant handful.
+MAX_SKILLS = 12
+
 # PDL likelihood is an integer 0-10. 6 is PDL's own recommended floor for a
 # confident single-person match; below it the risk of a wrong person rises sharply.
 PDL_ACCEPT = 6
+
+
+@dataclass(frozen=True)
+class PdlAttributes:
+    """Single-valued profile attributes PDL returns alongside the résumé. These
+    ride the match we already pay for; we simply stop discarding them. Stored on
+    person_insights (not as claims) because they're structured attributes that
+    drive aggregation, not discrete quote-backed résumé facts. Every field is
+    optional — a PDL response that omits one just leaves it empty/None."""
+
+    current_industry: str = ""
+    current_company_size: str = ""
+    job_function: str = ""          # PDL job_title_role (e.g. "finance")
+    pdl_seniority: str = ""         # PDL job_title_levels joined (e.g. "director")
+    current_role_start_year: int | None = None
+    years_experience: int | None = None
+    linkedin_connections: int | None = None
+
+
+_EMPTY_ATTRS = PdlAttributes()
 
 
 @dataclass(frozen=True)
@@ -43,12 +66,14 @@ class PdlResult:
 
     ``matched`` is True only when PDL returned a 200 at/above the likelihood gate —
     which is also the only case PDL charges for, so ``cost_usd`` tracks ``matched``.
-    ``claim_rows`` is empty on a miss, an outage, or a below-gate likelihood."""
+    ``claim_rows`` is empty on a miss, an outage, or a below-gate likelihood.
+    ``attributes`` carries the structured extras (industry, tenure, etc.)."""
 
     claim_rows: tuple[ClaimRow, ...]
     likelihood: int
     matched: bool
     cost_usd: float
+    attributes: PdlAttributes = _EMPTY_ATTRS
 
 
 _EMPTY = PdlResult(claim_rows=(), likelihood=0, matched=False, cost_usd=0.0)
@@ -98,6 +123,7 @@ def enrich_pdl(
         likelihood=likelihood,
         matched=True,
         cost_usd=cost_usd_per_match,
+        attributes=_extract_attributes(data),
     )
 
 
@@ -168,7 +194,64 @@ def _map_claims(data: dict, confidence: float, source_url: str) -> list[ClaimRow
     for link in _public_links(data):
         rows.append(_claim("public_links", link[0], link[1], "", confidence))
 
+    for skill in _skills(data):
+        rows.append(_claim("skill", skill, source_url, "", confidence))
+
+    for cert in _certifications(data):
+        rows.append(_claim("certification", cert, source_url, "", confidence))
+
     return rows
+
+
+def _skills(data: dict) -> list[str]:
+    """Up to MAX_SKILLS cleaned skill strings, de-duplicated, order preserved."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for s in data.get("skills") or []:
+        val = _clean(s)
+        key = val.lower()
+        if val and key not in seen:
+            seen.add(key)
+            out.append(val)
+        if len(out) >= MAX_SKILLS:
+            break
+    return out
+
+
+def _certifications(data: dict) -> list[str]:
+    """Certification names. PDL items may be strings or {name: ...} objects; both
+    are handled, and absence is fine (the field isn't on every plan)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for c in data.get("certifications") or []:
+        if isinstance(c, dict):
+            val = _clean(c.get("name"))
+        else:
+            val = _clean(c)
+        key = val.lower()
+        if val and key not in seen:
+            seen.add(key)
+            out.append(val)
+    return out
+
+
+def _extract_attributes(data: dict) -> PdlAttributes:
+    """Pull the single-valued profile extras PDL already returns. Defensive: every
+    field falls back to empty/None when PDL omits it (varies by plan/record)."""
+    levels = data.get("job_title_levels")
+    seniority = ", ".join(_clean(x) for x in levels if _clean(x)) if isinstance(levels, list) else ""
+    start_year = _year(data.get("job_start_date"))
+    years_exp = _as_int(data.get("inferred_years_experience"))
+    connections = _as_int(data.get("linkedin_connections"))
+    return PdlAttributes(
+        current_industry=_clean(data.get("job_company_industry")) or _clean(data.get("industry")),
+        current_company_size=_clean(data.get("job_company_size")),
+        job_function=_clean(data.get("job_title_role")),
+        pdl_seniority=seniority,
+        current_role_start_year=int(start_year) if start_year else None,
+        years_experience=years_exp or None,
+        linkedin_connections=connections or None,
+    )
 
 
 def _experience_claim(entry: object, source_url: str, confidence: float) -> ClaimRow | None:

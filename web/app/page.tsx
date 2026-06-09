@@ -97,9 +97,11 @@ export default async function Home({
                 hasOutcomeData={insights.hasOutcomeData}
                 startFirms={insights.startFirms}
                 landingFirms={insights.landingFirms}
+                landingSectors={insights.landingSectors}
                 seniority={insights.seniority}
                 currentTitles={insights.currentTitles}
                 signatureStats={insights.signatureStats}
+                clusters={insights.clusters}
                 geoSpread={insights.geoSpread}
                 schoolSpread={insights.schoolSpread}
                 measuredSectors={insights.measuredSectors}

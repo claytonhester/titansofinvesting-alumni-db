@@ -3,8 +3,13 @@ from __future__ import annotations
 
 from insights_store import InsightsSnapshot
 from kpi_rollup import (
+    advanced_degree_rate,
+    avg_tenure,
+    avg_years_to_md,
     count_flag,
     kpi_signature_stats,
+    landing_sectors,
+    left_texas_rate,
     reached_md_stats,
     transitioned_count,
     with_kpi_stats,
@@ -12,11 +17,14 @@ from kpi_rollup import (
 from person_insights_store import PersonInsight
 
 
-def _p(pid, *, grad=None, md=False, buy=False, fp=False, sff=False, sss=False):
+def _p(pid, *, grad=None, md=False, buy=False, fp=False, sff=False, sss=False,
+       adv=False, tenure=None, ytm=None, left=None, sector=""):
     return PersonInsight(
         person_id=pid, grad_year=grad, grad_year_source="class-map",
         first_employer="X", on_buy_side=buy, reached_md=md,
         founder_partner=fp, still_first_firm=sff, started_sell_side=sss,
+        has_advanced_degree=adv, tenure_years=tenure, years_to_md=ytm,
+        left_texas=left, current_sector=sector,
     )
 
 
@@ -73,12 +81,15 @@ def test_signature_stats_shape_and_order():
     ]
     stats = kpi_signature_stats(people, snapshot_year=2026)
     labels = [s.label for s in stats]
-    assert labels == [
+    # the 4 KPIs lead the scorecard, in order...
+    assert labels[:4] == [
         "Now on the buy-side",
         "Reached MD or above",
         "Founders & partners",
         "Still at their first firm",
     ]
+    # ...then the folded-in cohort stats follow (degree rate always present)
+    assert "Earned a graduate degree" in labels
     # buy-side 2/3 = 67%
     assert stats[0].value == "67%"
     # MD: denom = grads<=2016 (1,2) + reached (none extra) = 2; num = 2 -> 100%
@@ -120,6 +131,38 @@ def test_buy_side_detail_shows_transition():
     people = [_p(1, buy=True, sss=True), _p(2, buy=True, sss=True)]
     stats = kpi_signature_stats(people, snapshot_year=2026)
     assert "2 moved in from banking or consulting" == stats[0].detail
+
+
+def test_secondary_metrics():
+    people = [
+        _p(1, adv=True, tenure=8, ytm=8, left=True, sector="Private Equity & Credit"),
+        _p(2, adv=False, tenure=4, ytm=None, left=False, sector="Private Equity & Credit"),
+        _p(3, adv=True, tenure=None, ytm=6, left=None, sector="Investment Banking"),
+    ]
+    assert advanced_degree_rate(people) == 67          # 2/3
+    assert avg_tenure(people) == 6.0                    # (8+4)/2
+    assert avg_years_to_md(people) == 7.0               # (8+6)/2
+    assert left_texas_rate(people) == (50, 2)          # 1 of 2 known
+
+
+def test_landing_sectors_sorted_skips_blank():
+    people = [
+        _p(1, sector="Private Equity & Credit"),
+        _p(2, sector="Private Equity & Credit"),
+        _p(3, sector="Investment Banking"),
+        _p(4, sector=""),  # unenriched — skipped
+    ]
+    secs = landing_sectors(people)
+    assert secs[0].sector == "Private Equity & Credit" and secs[0].count == 2
+    assert secs[1].sector == "Investment Banking" and secs[1].count == 1
+    assert all(s.sector for s in secs)  # no blank bucket
+
+
+def test_with_kpi_stats_sets_landing_sectors():
+    people = [_p(1, sector="Investment Banking"), _p(2, sector="Investment Banking")]
+    out = with_kpi_stats(_blank_snap(), people, snapshot_year=2026)
+    assert out.landing_sectors[0].sector == "Investment Banking"
+    assert out.landing_sectors[0].count == 2
 
 
 def test_with_kpi_stats_empty_keeps_founders_clears_tiles():

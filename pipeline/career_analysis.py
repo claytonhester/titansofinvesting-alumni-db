@@ -23,6 +23,11 @@ import re
 from dataclasses import dataclass
 
 from enrichment_store import ClaimRow
+from insights_rollup import SENIORITY_TIERS, classify_seniority_keyword
+
+# Seniority-ladder index at/above which a title counts as "MD or above" (the
+# "Director / Managing Director" rung). Mirrors the reached_md bar.
+_MD_TIER_INDEX = 2
 
 _PAREN_YEARS_RE = re.compile(r"\((\d{4})\s*[-–]\s*(\d{4}|present|current)?\)", re.IGNORECASE)
 _QUOTE_YEARS_RE = re.compile(r"\b(\d{4})\s*[-–]\s*(\d{4}|present|current)\b", re.IGNORECASE)
@@ -103,3 +108,41 @@ def first_post_grad_employer(
     if dated:
         return min(dated, key=lambda e: e.start_year).company
     return entries[0].company
+
+
+def _norm_company(name: str) -> str:
+    return " ".join(name.lower().replace(",", " ").split())
+
+
+def num_employers(claims: list[ClaimRow]) -> int:
+    """Distinct employers across the career history — a job-mobility proxy."""
+    companies = {
+        _norm_company(e.company) for e in career_entries(claims) if e.company
+    }
+    return len(companies)
+
+
+def years_to_md(claims: list[ClaimRow], grad_year: int | None) -> int | None:
+    """Years from graduation to the FIRST Managing-Director-or-above role (career
+    velocity). None when grad year is unknown or no MD+ role has a start year.
+    Clamped at 0 so a pre-graduation senior title can't go negative."""
+    if grad_year is None:
+        return None
+    md_starts = [
+        e.start_year
+        for e in career_entries(claims)
+        if e.start_year is not None
+        and classify_seniority_keyword(e.title) in SENIORITY_TIERS
+        and SENIORITY_TIERS.index(classify_seniority_keyword(e.title)) >= _MD_TIER_INDEX
+    ]
+    if not md_starts:
+        return None
+    return max(0, min(md_starts) - grad_year)
+
+
+def tenure_years(start_year: int | None, ref_year: int) -> int | None:
+    """Years in the current role given its start year and a reference (snapshot)
+    year. None when the start year is unknown; clamped at 0."""
+    if start_year is None:
+        return None
+    return max(0, ref_year - start_year)

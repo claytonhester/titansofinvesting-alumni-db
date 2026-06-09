@@ -7,6 +7,7 @@ import type {
   CurrentTitle,
   SignatureStat,
 } from "@/lib/insights";
+import type { FirmCluster } from "@/lib/db";
 
 interface FirmBar {
   company: string;
@@ -30,9 +31,11 @@ interface InsightsViewsProps {
   hasOutcomeData: boolean;
   startFirms: FirmBar[];
   landingFirms: FirmCount[];
+  landingSectors: SectorBar[];
   seniority: SeniorityTier[];
   currentTitles: CurrentTitle[];
   signatureStats: SignatureStat[];
+  clusters: FirmCluster[];
   geoSpread: GeoBar[];
   schoolSpread: SchoolBar[];
   measuredSectors: SectorBar[];
@@ -101,6 +104,10 @@ export default function InsightsViews(props: InsightsViewsProps) {
     label: s.sector,
     count: s.count,
   }));
+  const landingSectorRows = props.landingSectors.map((s) => ({
+    label: s.sector,
+    count: s.count,
+  }));
   const titleFirms = props.currentTitles.map((t) => ({
     company: t.title,
     count: t.count,
@@ -136,12 +143,14 @@ export default function InsightsViews(props: InsightsViewsProps) {
                 <div className="score-value">{s.value}</div>
                 <div className="score-label">{s.label}</div>
                 <div className="score-detail">{s.detail}</div>
-                <div className="score-bar-track">
-                  <div
-                    className="score-bar-fill"
-                    style={{ width: `${Math.min(s.pct, 100)}%` }}
-                  />
-                </div>
+                {s.pct > 0 && (
+                  <div className="score-bar-track">
+                    <div
+                      className="score-bar-fill"
+                      style={{ width: `${Math.min(s.pct, 100)}%` }}
+                    />
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -251,6 +260,51 @@ export default function InsightsViews(props: InsightsViewsProps) {
                 <EmptyState
                   title="No current titles yet"
                   note="Current titles are collected during enrichment."
+                />
+              )}
+            </div>
+
+            <div className="panel col-6">
+              <div className="insight-synthesis-head">
+                <h3>Where they land, by sector</h3>
+                <span className="col-tag">current employer · measured</span>
+              </div>
+              {landingSectorRows.length > 0 ? (
+                <Bars rows={landingSectorRows} />
+              ) : (
+                <EmptyState
+                  title="No landing sectors yet"
+                  note="Built from verified current employers — appears as alumni are enriched."
+                />
+              )}
+            </div>
+
+            <div className="panel col-6">
+              <div className="insight-synthesis-head">
+                <h3>Where Titans cluster</h3>
+                <span className="col-tag">who&rsquo;s where · measured</span>
+              </div>
+              {props.clusters.length > 0 ? (
+                <div className="cluster-list">
+                  {props.clusters.map((c) => (
+                    <div className="cluster-row" key={c.company}>
+                      <div className="cluster-head">
+                        <span className="cluster-firm">{c.company}</span>
+                        <span className="cluster-count">{c.count}</span>
+                      </div>
+                      <div className="cluster-members">
+                        {c.members.join(", ")}
+                        {c.count > c.members.length
+                          ? ` +${c.count - c.members.length} more`
+                          : ""}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState
+                  title="No clusters yet"
+                  note="Once two or more Titans share a current employer, they show up here — your shortcut to a warm intro."
                 />
               )}
             </div>

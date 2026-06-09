@@ -628,6 +628,7 @@ export interface InsightsSnapshot {
   current_titles: { title: string; count: number }[];
   seniority: { tier: string; count: number }[];
   signature_stats: { label: string; value: string; detail: string; pct: number }[];
+  landing_sectors: { sector: string; count: number }[];
   founders_partners: number;
 }
 
@@ -662,6 +663,7 @@ export function latestInsightsSnapshot(): InsightsSnapshot | null {
     current_titles?: { title: string; count: number }[];
     seniority?: { tier: string; count: number }[];
     signature_stats?: { label: string; value: string; detail: string; pct: number }[];
+    landing_sectors?: { sector: string; count: number }[];
     founders_partners?: number;
   };
 
@@ -676,6 +678,48 @@ export function latestInsightsSnapshot(): InsightsSnapshot | null {
     current_titles: payload.current_titles ?? [],
     seniority: payload.seniority ?? [],
     signature_stats: payload.signature_stats ?? [],
+    landing_sectors: payload.landing_sectors ?? [],
     founders_partners: payload.founders_partners ?? 0,
   };
+}
+
+// Same-firm alumni clusters — live, from the enriched current_employer claims
+// joined back to people. Powers the "Where Titans cluster" panel and answers the
+// app's core "who else can I talk to at X" question. Guarded: returns [] when the
+// claims table has no current_employer rows yet. Member names are capped per firm
+// for display; `count` is the true total.
+export interface FirmCluster {
+  company: string;
+  count: number;
+  members: string[];
+}
+
+export function firmClusters(limit = 8, membersPerFirm = 6): FirmCluster[] {
+  let rows: { company: string; full_name: string }[];
+  try {
+    rows = db()
+      .prepare(
+        `SELECT TRIM(c.value) AS company, p.full_name AS full_name
+         FROM claims c JOIN people p ON p.id = c.person_id
+         WHERE c.claim_type = 'current_employer' AND TRIM(c.value) <> ''`
+      )
+      .all() as { company: string; full_name: string }[];
+  } catch {
+    return [];
+  }
+  const byFirm = new Map<string, string[]>();
+  for (const { company, full_name } of rows) {
+    const list = byFirm.get(company) ?? [];
+    list.push(full_name);
+    byFirm.set(company, list);
+  }
+  return [...byFirm.entries()]
+    .map(([company, members]) => ({
+      company,
+      count: members.length,
+      members: members.slice(0, membersPerFirm),
+    }))
+    .filter((c) => c.count >= 2) // a "cluster" needs at least two Titans
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
 }
