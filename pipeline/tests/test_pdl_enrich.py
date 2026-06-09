@@ -30,6 +30,7 @@ def _full_record() -> dict:
             "job_company_industry": "investment management",
             "job_company_size": "1001-5000",
             "job_title_role": "finance",
+            "job_title_sub_role": "investment_banking",
             "job_title_levels": ["director", "partner"],
             "job_start_date": "2018-04",
             "inferred_years_experience": 14,
@@ -54,7 +55,7 @@ def _full_record() -> dict:
             ],
             "education": [
                 {"school": {"name": "Rice University"}, "degrees": ["MBA"],
-                 "end_date": "2009-05"},
+                 "majors": ["Finance"], "end_date": "2009-05"},
             ],
             "profiles": [
                 {"network": "twitter", "url": "twitter.com/janedoe"},
@@ -87,9 +88,9 @@ def test_confident_match_maps_canonical_claims() -> None:
     assert by_type["current_employer"][0].value == "Apex Capital"
     assert by_type["location"][0].value == "Austin, Texas"
     assert len(by_type["career_history"]) == 2
-    assert by_type["education"][0].value == "MBA from Rice University"
-    # End year goes in the quote so grad-year derivation gets a VERIFIED year
-    # while the display value stays clean.
+    # Field of study folds into the degree string; end year goes in the quote so
+    # grad-year derivation gets a VERIFIED year while the display value stays clean.
+    assert by_type["education"][0].value == "MBA in Finance from Rice University"
     assert by_type["education"][0].quote == "Graduated 2009"
     # LinkedIn promoted to a full URL; the duplicate linkedin profile is dropped,
     # leaving the LinkedIn link plus the non-linkedin twitter profile.
@@ -122,6 +123,7 @@ def test_extracts_profile_attributes() -> None:
     assert attrs.current_industry == "investment management"
     assert attrs.current_company_size == "1001-5000"
     assert attrs.job_function == "finance"
+    assert attrs.job_sub_function == "investment_banking"
     assert attrs.pdl_seniority == "director, partner"
     assert attrs.current_role_start_year == 2018
     assert attrs.years_experience == 14

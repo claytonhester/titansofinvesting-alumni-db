@@ -154,6 +154,23 @@ def test_negative_pdl_matches_clamped() -> None:
 
 
 @pytest.mark.unit
+def test_perplexity_requests_priced_and_in_total() -> None:
+    """Perplexity /search is billed per request and folded into total_usd."""
+    from cost_log import PERPLEXITY_USD_PER_REQUEST
+
+    entry = build_entry(
+        label="run",
+        people=10,
+        haiku_in=0,
+        haiku_out=0,
+        perplexity_requests=10,
+    )
+    assert entry.perplexity_requests == 10
+    assert entry.perplexity_usd == pytest.approx(round(10 * PERPLEXITY_USD_PER_REQUEST, 4))
+    assert entry.total_usd == pytest.approx(entry.perplexity_usd)
+
+
+@pytest.mark.unit
 def test_gnews_requests_informational_not_in_total() -> None:
     """GNews is a flat subscription — its request count is recorded but must NOT
     inflate total_usd."""
