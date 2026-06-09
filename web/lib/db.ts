@@ -623,6 +623,27 @@ export function curatedNews(limit = 40): CuratedNewsRow[] {
   }
 }
 
+// One person's curated feed — the same editorial gate the homepage tab uses,
+// scoped to a person for their profile page. Never the raw news_mention claims,
+// so a low-signal mention (a bio page, a passing name-drop) the curator dropped
+// does not resurface here. Ordered best-first.
+export function curatedNewsForPerson(personId: number): CuratedNewsRow[] {
+  try {
+    return db()
+      .prepare(
+        `SELECT p.name_slug, p.full_name, p.school, p.titan_class,
+                n.headline, n.summary, n.category, n.date,
+                n.source_url, n.source_host, n.importance
+         FROM news_curated n JOIN people p ON p.id = n.person_id
+         WHERE n.person_id = ?
+         ORDER BY n.importance DESC, n.date DESC`
+      )
+      .all(personId) as CuratedNewsRow[];
+  } catch {
+    return [];
+  }
+}
+
 export function curatedNewsCount(): number {
   try {
     const row = db()
@@ -763,4 +784,184 @@ export function firmClusters(limit = 8, membersPerFirm = 6): FirmCluster[] {
     .filter((c) => c.count >= 2) // a "cluster" needs at least two Titans
     .sort((a, b) => b.count - a.count)
     .slice(0, limit);
+}
+
+// ---------------------------------------------------------------------------
+// Company layer — cached firmographics (pipeline/company_enrich.py), keyed by
+// domain, linked to alumni via person_insights.employer_domain. Read-only here.
+// ---------------------------------------------------------------------------
+
+export interface Company {
+  domain: string;
+  slug: string;
+  name: string;
+  industry: string;
+  industryV2: string;
+  size: string;
+  employeeCount: number | null;
+  companyType: string;
+  ticker: string;
+  founded: number | null;
+  hqLocation: string;
+  linkedinUrl: string;
+  summary: string;
+  tags: string[];
+}
+
+// Slug from the firm name ("Boston Consulting Group (BCG)" -> "boston-consulting-
+// group-bcg"). Domain is the unique key; the slug is for clean URLs. Collisions
+// are resolved by getCompanyBySlug falling back to a domain match.
+export function companySlug(name: string, domain: string): string {
+  const base = (name || domain)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return base || domain.replace(/\./g, "-");
+}
+
+interface CompanyRow {
+  domain: string;
+  name: string;
+  industry: string;
+  industry_v2: string;
+  size: string;
+  employee_count: number | null;
+  company_type: string;
+  ticker: string;
+  founded: number | null;
+  hq_location: string;
+  linkedin_url: string;
+  summary: string;
+  tags: string;
+  matched: number;
+}
+
+function toCompany(r: CompanyRow): Company {
+  return {
+    domain: r.domain,
+    slug: companySlug(r.name, r.domain),
+    name: r.name || r.domain,
+    industry: r.industry || "",
+    industryV2: r.industry_v2 || "",
+    size: r.size || "",
+    employeeCount: r.employee_count,
+    companyType: r.company_type || "",
+    ticker: r.ticker || "",
+    founded: r.founded,
+    hqLocation: r.hq_location || "",
+    linkedinUrl: r.linkedin_url || "",
+    summary: r.summary || "",
+    tags: (r.tags || "").split(",").filter(Boolean),
+  };
+}
+
+// All MATCHED firms (no-match sentinels excluded). Returns [] before the table
+// exists (pre-first-run), so the app degrades cleanly.
+function allMatchedCompanies(): CompanyRow[] {
+  try {
+    return db()
+      .prepare(`SELECT * FROM companies WHERE matched = 1`)
+      .all() as CompanyRow[];
+  } catch {
+    return [];
+  }
+}
+
+// The matched firm for a person, via person_insights.employer_domain. Drives the
+// clickable firm chip on the profile. null when unmatched / not enriched.
+export function getCompanyForPerson(personId: number): Company | null {
+  try {
+    const row = db()
+      .prepare(
+        `SELECT c.* FROM companies c
+         JOIN person_insights pi ON pi.employer_domain = c.domain
+         WHERE pi.person_id = ? AND c.matched = 1`
+      )
+      .get(personId) as CompanyRow | undefined;
+    return row ? toCompany(row) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getCompanyBySlug(slug: string): Company | null {
+  const match = allMatchedCompanies()
+    .map(toCompany)
+    .find((c) => c.slug === slug || c.domain.replace(/\./g, "-") === slug);
+  return match ?? null;
+}
+
+export interface TitanLink {
+  name_slug: string;
+  full_name: string;
+  school: string;
+  titan_class: number;
+  title: string;
+  start_year: number | null;
+  end_year: number | null;
+  is_current: boolean;
+}
+
+// Every Titan tied to this firm across their WHOLE career (person_company), with
+// role + years, split into who's there now vs who passed through. Powers the
+// company page's institutional-memory view. Current first, then most-recent past.
+export function titansAtCompany(domain: string): {
+  current: TitanLink[];
+  past: TitanLink[];
+} {
+  let rows: (TitanLink & { is_current_int: number })[] = [];
+  try {
+    rows = db()
+      .prepare(
+        `SELECT p.name_slug, p.full_name, p.school, p.titan_class,
+                pc.title AS title, pc.start_year, pc.end_year,
+                pc.is_current AS is_current_int
+         FROM person_company pc
+         JOIN people p ON p.id = pc.person_id
+         WHERE pc.domain = ?
+         ORDER BY pc.is_current DESC, pc.end_year DESC, p.full_name`
+      )
+      .all(domain) as (TitanLink & { is_current_int: number })[];
+  } catch {
+    return { current: [], past: [] };
+  }
+  const norm = (r: TitanLink & { is_current_int: number }): TitanLink => ({
+    name_slug: r.name_slug,
+    full_name: r.full_name,
+    school: r.school,
+    titan_class: r.titan_class,
+    title: r.title || "",
+    start_year: r.start_year,
+    end_year: r.end_year,
+    is_current: Boolean(r.is_current_int),
+  });
+  return {
+    current: rows.filter((r) => r.is_current_int).map(norm),
+    past: rows.filter((r) => !r.is_current_int).map(norm),
+  };
+}
+
+// Top employers by # of Titans, joined to their enriched firm record (for the
+// overview leaderboard with clickable company pages).
+export interface TopCompany extends Company {
+  count: number;
+}
+
+export function topCompanies(limit = 12): TopCompany[] {
+  try {
+    const rows = db()
+      .prepare(
+        `SELECT c.*, COUNT(pi.person_id) AS count
+         FROM companies c
+         JOIN person_insights pi ON pi.employer_domain = c.domain
+         WHERE c.matched = 1
+         GROUP BY c.domain
+         ORDER BY count DESC, c.employee_count DESC
+         LIMIT ?`
+      )
+      .all(limit) as (CompanyRow & { count: number })[];
+    return rows.map((r) => ({ ...toCompany(r), count: r.count }));
+  } catch {
+    return [];
+  }
 }

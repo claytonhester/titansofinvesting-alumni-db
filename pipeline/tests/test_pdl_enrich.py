@@ -10,9 +10,28 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from pdl_enrich import PDL_ACCEPT, enrich_pdl
+from pdl_enrich import PDL_ACCEPT, _career_links, enrich_pdl
 
 _PER_MATCH = 0.28
+
+
+@pytest.mark.unit
+def test_career_links_capture_domain_title_dates_and_current() -> None:
+    data = {"experience": [
+        {"title": {"name": "Partner"}, "company": {"name": "Sage Advisory",
+         "website": "https://www.sageadvisory.com"}, "start_date": "2019-01",
+         "end_date": None, "is_primary": True},
+        {"title": {"name": "VP Research"}, "company": {"name": "Sage Advisory",
+         "website": "sageadvisory.com"}, "start_date": "2015", "end_date": "2019"},
+        {"title": {"name": "Analyst"}, "company": {"name": "Old Bank", "website": ""},
+         "start_date": "2013", "end_date": "2015"},
+    ]}
+    links = _career_links(data)
+    assert links[0].domain == "sageadvisory.com" and links[0].is_current is True
+    assert links[0].start_year == 2019 and links[0].end_year is None
+    assert links[1].is_current is False and links[1].end_year == 2019
+    # Old Bank has no website -> domain empty (won't link to a company page).
+    assert links[2].domain == "" and links[2].company_name == "Old Bank"
 
 
 def _client(handler) -> httpx.Client:

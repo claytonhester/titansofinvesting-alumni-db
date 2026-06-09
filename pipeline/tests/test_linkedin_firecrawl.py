@@ -11,6 +11,7 @@ from linkedin_firecrawl import (
     DEFAULT_MAX_CREDITS,
     EXTRACTION_METHOD,
     LinkedInBudget,
+    _current_role_start_year_from_claims,
     agent_batch_budget,
     build_prompt,
     fetch_linkedin,
@@ -195,3 +196,101 @@ def test_agent_batch_budget_scales_but_floors_at_one_firing():
     assert agent_batch_budget(1) >= DEFAULT_MAX_CREDITS      # single run can fire once
     assert agent_batch_budget(100) == 15 * 100               # scales with batch size
     assert agent_batch_budget(0) >= DEFAULT_MAX_CREDITS      # never negative/zero
+
+
+# --- Year-gap heuristic -------------------------------------------------------
+
+def _c_career(value, quote=""):
+    return ClaimRow(claim_type="career_history", value=value, source_url="",
+                    quote=quote, confidence=0.8, extraction_method="pdl")
+
+
+def test_current_role_start_year_from_value():
+    claims = [_c_career("Partner at Acme (2016-present)")]
+    assert _current_role_start_year_from_claims(claims) == 2016
+
+
+def test_current_role_start_year_from_value_now():
+    claims = [_c_career("MD at Firm (2019-now)")]
+    assert _current_role_start_year_from_claims(claims) == 2019
+
+
+def test_current_role_start_year_from_quote():
+    claims = [_c_career("Partner at Acme (2016-present)",
+                         quote="2016 - present Partner @ Acme")]
+    assert _current_role_start_year_from_claims(claims) == 2016
+
+
+def test_current_role_start_year_ignores_past_roles():
+    claims = [
+        _c_career("Analyst at TRS (2008-2013)", quote="2008 - 2013 Analyst @ TRS"),
+        _c_career("Partner at Acme (2021-present)", quote="2021 - present Partner @ Acme"),
+    ]
+    assert _current_role_start_year_from_claims(claims) == 2021
+
+
+def test_current_role_start_year_returns_none_when_all_past():
+    claims = [_c_career("Analyst at TRS (2008-2013)")]
+    assert _current_role_start_year_from_claims(claims) is None
+
+
+def test_profile_needs_linkedin_year_gap_triggers():
+    """Profile passes primary checks (3 roles, employer, education) but the
+    gap from grad_year=2008 to current_role_start_year=2021 (13 years) means
+    we'd expect at least 3 distinct employers; with only 3 entries it still
+    fires because gap//4 == 3 == career count, so career < expected_min fails."""
+    claims = [
+        _c("current_employer", "Acme"),
+        _c("education", "BBA Texas A&M"),
+        _c_career("Partner at Acme (2021-present)"),
+        _c_career("VP at Beta (2016-2021)"),
+        _c_career("Analyst at Gamma (2013-2016)"),
+    ]
+    # gap = 2021 - 2008 = 13, expected_min = max(3, 13//4=3) = 3, career=3 => NOT triggered
+    # Use a wider gap to force the trigger: grad=2006, start=2021, gap=15, expected=3, career=3
+    assert profile_needs_linkedin(claims, grad_year=2006, current_role_start_year=2021) is False
+    # With only 2 career entries and a 15-year gap, should trigger
+    sparse = [
+        _c("current_employer", "Acme"),
+        _c("education", "BBA Texas A&M"),
+        _c_career("Partner at Acme (2021-present)"),
+        _c_career("Analyst at Gamma (2013-2021)"),  # 2 entries, gap=15
+    ]
+    assert profile_needs_linkedin(sparse, grad_year=2006, current_role_start_year=2021) is True
+
+
+def test_profile_needs_linkedin_short_gap_no_trigger():
+    """A 4-year gap (fresh grad in current role) should NOT trigger the heuristic."""
+    claims = [
+        _c("current_employer", "Acme"),
+        _c("education", "BBA Texas A&M"),
+        _c_career("Analyst at Acme (2019-present)"),
+        _c_career("Intern at Acme (2018-2019)"),
+        _c_career("Research at UT (2017-2018)"),
+    ]
+    assert profile_needs_linkedin(claims, grad_year=2017, current_role_start_year=2019) is False
+
+
+def test_profile_needs_linkedin_no_gap_params_unchanged():
+    """Without grad_year/current_role_start_year the existing behavior is preserved."""
+    assert profile_needs_linkedin(_rich_profile()) is False
+    assert profile_needs_linkedin([_c("current_employer", "X")]) is True
+
+
+def test_budget_fires_on_year_gap():
+    """LinkedInBudget.decide respects the year-gap heuristic even when primary
+    section checks pass (3 roles, employer, education)."""
+    claims = [
+        _c("current_employer", "Acme"),
+        _c("education", "BBA Texas A&M"),
+        _c_career("Partner at Acme (2021-present)"),
+        _c_career("Analyst at Gamma (2013-2021)"),  # only 2 entries
+    ]
+    b = LinkedInBudget(1000)
+    # gap = 2021 - 2006 = 15, expected_min = 3, career = 2 -> should fire
+    d = b.decide(claims, trusted_count=2, grad_year=2006, current_role_start_year=2021)
+    assert d.fire is True
+
+    # Same profile passes when no year gap is provided (old behavior)
+    d_no_gap = LinkedInBudget(1000).decide(claims, trusted_count=2)
+    assert d_no_gap.fire is True  # still fires because career < min_career=3

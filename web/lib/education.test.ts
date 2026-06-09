@@ -27,6 +27,46 @@ describe("groupEducation", () => {
     ]);
   });
 
+  it("merges a McCombs MBA and a University of Texas MBA into one card+degree", () => {
+    const groups = groupEducation([
+      edu("Master of Business Administration From Texas McCombs School of Business"),
+      edu("MBA From The University of Texas"),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].institution).toBe("The University of Texas at Austin");
+    // "MBA" and "Master of Business Administration" are the same degree — one row.
+    expect(groups[0].degrees).toEqual(["Master of Business Administration"]);
+  });
+
+  it("collapses a bare degree level into its descriptive twin (same school)", () => {
+    const groups = groupEducation([
+      edu("MBA From Rice University"),
+      edu("Master of Business Administration in Real Estate Finance From Rice University"),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].degrees).toEqual([
+      "Master of Business Administration in Real Estate Finance",
+    ]);
+  });
+
+  it("keeps two same-level degrees with distinct fields apart", () => {
+    const groups = groupEducation([
+      edu("Bachelor of Science in Mathematics From Rice University"),
+      edu("Bachelor of Science in Physics From Rice University"),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].degrees).toHaveLength(2);
+  });
+
+  it("keeps genuinely different degree levels at one school", () => {
+    const groups = groupEducation([
+      edu("Bachelor of Business Administration From Texas A&M University"),
+      edu("Master of Science From Texas A&M University"),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].degrees).toHaveLength(2);
+  });
+
   it("drops a bare-institution duplicate when a degreed entry exists", () => {
     const groups = groupEducation([
       edu("Bachelor of Business Administration From Texas A&m University"),

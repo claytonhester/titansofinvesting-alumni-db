@@ -38,6 +38,10 @@ PDL_USD_PER_MATCH = 0.28
 # discovery pass makes one request per person). Previously untracked — folded in
 # so the run total isn't silently understated.
 PERPLEXITY_USD_PER_REQUEST = 0.005
+# Perplexity Sonar (the press-discovery pass) is token-priced + a per-request fee,
+# and the API usually reports an authoritative usage.cost. So unlike /search, the
+# dollar figure is computed by the caller (sonar_news) and passed in directly,
+# rather than derived from a flat per-request constant here.
 # GNews bills a flat monthly subscription, not per request, so there is no
 # per-call dollar price here — only an informational request count per run.
 
@@ -90,6 +94,8 @@ class CostEntry:
     pdl_usd: float
     perplexity_requests: int
     perplexity_usd: float
+    sonar_requests: int
+    sonar_usd: float
     gnews_requests: int
     total_usd: float
 
@@ -107,6 +113,8 @@ def build_entry(
     estimated_credits: int = 0,
     pdl_matches: int = 0,
     perplexity_requests: int = 0,
+    sonar_requests: int = 0,
+    sonar_usd: float = 0.0,
     gnews_requests: int = 0,
 ) -> CostEntry:
     """Assemble a CostEntry. Prefer the measured credit delta; fall back to the
@@ -123,6 +131,7 @@ def build_entry(
     c_usd = claude_usd(haiku_in, haiku_out, sonnet_in, sonnet_out)
     pdl_usd = max(0, pdl_matches) * PDL_USD_PER_MATCH
     pplx_usd = max(0, perplexity_requests) * PERPLEXITY_USD_PER_REQUEST
+    snr_usd = max(0.0, sonar_usd)
     return CostEntry(
         timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         label=label,
@@ -139,8 +148,10 @@ def build_entry(
         pdl_usd=round(pdl_usd, 4),
         perplexity_requests=max(0, perplexity_requests),
         perplexity_usd=round(pplx_usd, 4),
+        sonar_requests=max(0, sonar_requests),
+        sonar_usd=round(snr_usd, 4),
         gnews_requests=max(0, gnews_requests),
-        total_usd=round(fc_usd + c_usd + pdl_usd + pplx_usd, 4),
+        total_usd=round(fc_usd + c_usd + pdl_usd + pplx_usd + snr_usd, 4),
     )
 
 

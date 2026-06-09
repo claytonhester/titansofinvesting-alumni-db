@@ -23,7 +23,8 @@ Firecrawl/Sonnet path still completes. Public data only; no auth, no logins.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import httpx
 
@@ -56,9 +57,26 @@ class PdlAttributes:
     current_role_start_year: int | None = None
     years_experience: int | None = None
     linkedin_connections: int | None = None
+    company_website: str = ""        # PDL job_company_website — the firm's domain,
+                                     # used (cached) by company_enrich. Free to keep.
 
 
 _EMPTY_ATTRS = PdlAttributes()
+
+
+@dataclass(frozen=True)
+class CareerLink:
+    """One firm in a person's PDL career history, with the firm DOMAIN (when PDL
+    has it) so it can be linked to the cached `companies` layer — powering a firm
+    page's 'who works here now / who worked here before' with title + dates. Past
+    firms come free in the PDL experience[] array on a matched person."""
+
+    domain: str           # bare host from experience[].company.website ("" if absent)
+    company_name: str
+    title: str
+    start_year: int | None
+    end_year: int | None  # None when current/ongoing
+    is_current: bool
 
 
 @dataclass(frozen=True)
@@ -75,6 +93,7 @@ class PdlResult:
     matched: bool
     cost_usd: float
     attributes: PdlAttributes = _EMPTY_ATTRS
+    career_links: tuple[CareerLink, ...] = ()
 
 
 _EMPTY = PdlResult(claim_rows=(), likelihood=0, matched=False, cost_usd=0.0)
@@ -131,6 +150,7 @@ def enrich_pdl(
         matched=True,
         cost_usd=cost_usd_per_match,
         attributes=_extract_attributes(data),
+        career_links=_career_links(data),
     )
 
 
@@ -259,6 +279,7 @@ def _extract_attributes(data: dict) -> PdlAttributes:
         # legitimate "0 years" / "0 connections" isn't silently lost.
         years_experience=_opt_int(data.get("inferred_years_experience")),
         linkedin_connections=_opt_int(data.get("linkedin_connections")),
+        company_website=_clean(data.get("job_company_website")),
     )
 
 
@@ -287,6 +308,53 @@ def _experience_claim(entry: object, source_url: str, confidence: float) -> Clai
     if company_part:
         return _claim("career_history", f"{label} at {company_part}", source_url, "", confidence)
     return _claim("career_history", label, source_url, "", confidence)
+
+
+def _link_domain(url: str) -> str:
+    """Bare host from a company website, e.g. 'https://www.bcg.com/x' -> 'bcg.com'."""
+    s = (url or "").strip().lower()
+    if not s:
+        return ""
+    if "//" not in s:
+        s = "//" + s
+    try:
+        host = urlparse(s).hostname or ""
+    except Exception:
+        return ""
+    return host.removeprefix("www.")
+
+
+def _career_links(data: dict) -> tuple[CareerLink, ...]:
+    """Structured firm links from PDL experience[] — domain (when present), title,
+    and dates — so each firm can be tied to the cached companies layer for the
+    'who worked here, when, as what' view. De-duped on (domain|name, title, start)."""
+    out: list[CareerLink] = []
+    seen: set[tuple] = set()
+    for entry in data.get("experience") or []:
+        if not isinstance(entry, dict):
+            continue
+        company = entry.get("company") if isinstance(entry.get("company"), dict) else {}
+        domain = _link_domain(_clean(company.get("website")))
+        name = _clean(company.get("name"))
+        if not domain and not name:
+            continue
+        title = _clean(_nested(entry.get("title"), "name"))
+        sy = _year(entry.get("start_date"))
+        ey = _year(entry.get("end_date"))
+        is_current = bool(entry.get("is_primary")) or (entry.get("end_date") is None and bool(sy))
+        key = (domain or name.lower(), title.lower(), sy)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(CareerLink(
+            domain=domain,
+            company_name=name,
+            title=title,
+            start_year=int(sy) if sy else None,
+            end_year=None if is_current else (int(ey) if ey else None),
+            is_current=is_current,
+        ))
+    return tuple(out)
 
 
 def _education_claim(entry: object, source_url: str, confidence: float) -> ClaimRow | None:

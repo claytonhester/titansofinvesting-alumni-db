@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getClaimsForPerson, getPersonBySlug } from "@/lib/db";
+import {
+  curatedNewsForPerson,
+  getClaimsForPerson,
+  getCompanyForPerson,
+  getPersonBySlug,
+} from "@/lib/db";
+import { smartTitle } from "@/lib/normalize";
 import { buildResume, linkedinSearchUrl } from "@/lib/resume";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +22,22 @@ export default async function PersonPage({
 
   const claims = getClaimsForPerson(person.id);
   const resume = buildResume(person, claims);
+  // The "In the news" section reads the CURATED feed (the same Haiku editorial
+  // gate the homepage tab uses), not the raw news_mention claims — so a bio page
+  // or passing mention the curator dropped never resurfaces on the profile.
+  const personNews = curatedNewsForPerson(person.id);
+  // The current employer's enriched firm record (cached company layer) — drives a
+  // clickable firm chip linking to the company page. null when unmatched.
+  const company = getCompanyForPerson(person.id);
+  const companyChip = company
+    ? [
+        company.industry && smartTitle(company.industry),
+        company.size && `${company.size}`,
+        company.hqLocation && smartTitle(company.hqLocation.split(",")[0]),
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
 
   const headline =
     resume.currentTitle && resume.currentEmployer
@@ -56,6 +78,15 @@ export default async function PersonPage({
               <span className="flag">needs review</span>
             )}
           </div>
+          {company && (
+            <Link className="company-chip" href={`/company/${company.slug}`}>
+              <span className="company-chip-name">{company.name}</span>
+              {companyChip && (
+                <span className="company-chip-meta">{companyChip}</span>
+              )}
+              <span className="link-go">→</span>
+            </Link>
+          )}
         </div>
         <div className="resume-actions">
           <a
@@ -99,15 +130,37 @@ export default async function PersonPage({
                           />
                         </div>
                         <div className="xp-body">
-                          <div className="xp-dates">
-                            {g.roles[0].start ?? (g.current ? "" : "—")}
-                            {g.roles[0].end ? ` – ${g.roles[0].end}` : ""}
-                            {g.current && (
-                              <span className="now-pill">Current</span>
+                          {g.company && (
+                            g.current && company ? (
+                              <Link
+                                className="xp-title is-current"
+                                href={`/company/${company.slug}`}
+                              >
+                                {g.company}
+                              </Link>
+                            ) : (
+                              <p className={`xp-title${g.current ? " is-current" : ""}`}>
+                                {g.company}
+                              </p>
+                            )
+                          )}
+                          <div className="xp-role-row">
+                            <p className={`xp-co${g.current ? " is-current" : ""}`}>
+                              {g.roles[0].title}
+                            </p>
+                            {g.current ? (
+                              <span className="now-pill">
+                                {g.roles[0].start
+                                  ? `${g.roles[0].start} – Present`
+                                  : "Present"}
+                              </span>
+                            ) : (
+                              <span className="xp-dates">
+                                {g.roles[0].start ?? ""}
+                                {g.roles[0].end ? ` – ${g.roles[0].end}` : ""}
+                              </span>
                             )}
                           </div>
-                          <p className="xp-title">{g.roles[0].title}</p>
-                          {g.company && <p className="xp-co">{g.company}</p>}
                         </div>
                       </div>
                     ) : (
@@ -118,25 +171,50 @@ export default async function PersonPage({
                           />
                         </div>
                         <div className="xp-body">
-                          <p className="xp-co xp-group-co">{g.company}</p>
-                          <div className="xp-dates xp-group-span">
-                            {g.start ?? "—"}
-                            {g.end ? ` – ${g.end}` : ""}
+                          {g.company && (
+                            g.current && company ? (
+                              <Link
+                                className="xp-title is-current"
+                                href={`/company/${company.slug}`}
+                              >
+                                {g.company}
+                              </Link>
+                            ) : (
+                              <p className={`xp-title${g.current ? " is-current" : ""}`}>
+                                {g.company}
+                              </p>
+                            )
+                          )}
+                          <div className="xp-role-row">
+                            <p className={`xp-co${g.current ? " is-current" : ""}`}>
+                              {g.roles[0].title}
+                            </p>
+                            {g.current ? (
+                              <span className="now-pill">
+                                {g.roles[0].start
+                                  ? `${g.roles[0].start} – Present`
+                                  : "Present"}
+                              </span>
+                            ) : (
+                              <span className="xp-dates">
+                                {g.roles[0].start ?? ""}
+                                {g.roles[0].end ? ` – ${g.roles[0].end}` : ""}
+                              </span>
+                            )}
                           </div>
-                          <div className="xp-roles">
-                            {g.roles.map((r, ri) => (
-                              <div className="xp-role" key={`${r.title}-${ri}`}>
-                                <div className="xp-dates">
-                                  {r.start ?? (r.current ? "" : "—")}
-                                  {r.end ? ` – ${r.end}` : ""}
-                                  {r.current && (
-                                    <span className="now-pill">Current</span>
-                                  )}
+                          {g.roles.length > 1 && (
+                            <div className="xp-roles">
+                              {g.roles.slice(1).map((r, ri) => (
+                                <div className="xp-role" key={`${r.title}-${ri}`}>
+                                  <span className="xp-role-title">{r.title}</span>
+                                  <span className="xp-role-date">
+                                    {r.start ?? ""}
+                                    {r.end ? ` – ${r.end}` : ""}
+                                  </span>
                                 </div>
-                                <p className="xp-title">{r.title}</p>
-                              </div>
-                            ))}
-                          </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )
@@ -183,37 +261,35 @@ export default async function PersonPage({
               </section>
             )}
 
-            {resume.news.length > 0 && (
+            {personNews.length > 0 && (
               <section className="resume-section">
                 <h2 className="resume-section-head">In the news</h2>
-                <p className="section-sub">Unverified public mentions</p>
+                <p className="section-sub">
+                  Curated press where {person.full_name.split(/\s+/)[0]} is the
+                  subject
+                </p>
                 <div className="links-list">
-                  {resume.news.map((n, i) => {
-                    let host = n.url;
-                    try {
-                      host = new URL(n.url).hostname.replace(/^www\./, "");
-                    } catch {
-                      host = n.url;
-                    }
-                    return (
-                      <a
-                        className="link-row news-row"
-                        key={`${n.url}-${i}`}
-                        href={n.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        <span className="news-text">
-                          <span className="link-label">{n.headline}</span>
-                          <span className="news-meta">
-                            {host}
-                            {n.date ? ` · ${n.date}` : ""}
-                          </span>
+                  {personNews.map((n, i) => (
+                    <a
+                      className="link-row news-row"
+                      key={`${n.source_url}-${i}`}
+                      href={n.source_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <span className="news-text">
+                        <span className="link-label">{n.headline}</span>
+                        {n.summary && (
+                          <span className="news-summary">{n.summary}</span>
+                        )}
+                        <span className="news-meta">
+                          {n.category} · {n.source_host}
+                          {n.date ? ` · ${n.date}` : ""}
                         </span>
-                        <span className="link-go">↗</span>
-                      </a>
-                    );
-                  })}
+                      </span>
+                      <span className="link-go">↗</span>
+                    </a>
+                  ))}
                 </div>
               </section>
             )}

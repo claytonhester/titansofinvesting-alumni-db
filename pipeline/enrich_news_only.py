@@ -27,6 +27,7 @@ from enrichment_store import ClaimRow, replace_claims
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
 from linkedin_firecrawl import fetch_linkedin, profile_needs_linkedin
 from mention_discovery import discover_mentions
+from sonar_news import discover_press_sonar
 from news_enrich import extract_news_mentions
 from normalize import digest_claims
 from pdl_enrich import enrich_pdl
@@ -188,6 +189,22 @@ def run(name: str | None) -> int:
                               f"(found {mentions.found}, kept {mentions.after_filter})")
                 else:
                     print("  Mentions: PERPLEXITY_API_KEY not set — skipped")
+
+                # ── Perplexity Sonar press (cited, person-specific) ──────────
+                if perplexity_key:
+                    sonar = discover_press_sonar(
+                        http, full_name, verified_employer or company, city,
+                        perplexity_key=perplexity_key,
+                    )
+                    if sonar.claim_rows:
+                        new_claims.extend(sonar.claim_rows)
+                        print(f"  Sonar press: {sonar.kept} kept of {sonar.found} "
+                              f"(${sonar.cost_usd:.4f})")
+                    else:
+                        print(f"  Sonar press: 0 kept (found {sonar.found}, "
+                              f"${sonar.cost_usd:.4f})")
+                else:
+                    print("  Sonar press: PERPLEXITY_API_KEY not set — skipped")
 
                 # ── Persist ──────────────────────────────────────────────────
                 # Merge existing (loaded above) with new, normalize case,
