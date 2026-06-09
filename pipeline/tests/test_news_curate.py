@@ -22,16 +22,10 @@ def test_no_mentions_returns_empty():
     assert curate_news(None, "Jane", "Acme", other) == ([], 0, 0)
 
 
-def test_fallback_without_client():
+def test_no_client_returns_empty():
+    """The feed is scarce by design: with no editor judgment, nothing is shown."""
     mentions = [_mention("2026-05-21 — Acme Raises $1B", "Acme closed its fund.")]
-    curated, ti, to = curate_news(None, "Jane", "Acme", mentions)
-    assert ti == 0 and to == 0 and len(curated) == 1
-    c = curated[0]
-    assert c.headline == "Acme Raises $1B" and c.date == "2026-05-21"
-    assert c.category == "Company News"          # neutral fallback
-    assert c.summary == "Acme closed its fund."  # snippet as summary
-    assert c.source_host == "bloomberg.com"      # www. stripped
-    assert 0.0 <= c.importance <= 1.0
+    assert curate_news(None, "Jane", "Acme", mentions) == ([], 0, 0)
 
 
 def _client(text):
@@ -43,38 +37,62 @@ def _client(text):
     return SimpleNamespace(messages=SimpleNamespace(create=create))
 
 
-def test_client_assigns_category_summary_importance():
+def test_show_true_above_threshold_is_kept():
     mentions = [
-        _mention("2026-05-21 — Acme Raises $1B", "snippet a"),
+        _mention("2026-05-21 — Jane on the macro outlook", "snippet a"),
         _mention("2026-05-09 — Jane Promoted to Partner", "snippet b"),
     ]
     client = _client(
-        '[{"index":0,"category":"Funding & Deals","summary":"Acme closed a $1B fund.","importance":0.9},'
-        '{"index":1,"category":"Leadership Moves","summary":"Jane made partner.","importance":0.7}]'
+        '[{"index":0,"show":true,"category":"Market Views","summary":"Jane shares her macro outlook.","importance":0.8},'
+        '{"index":1,"show":true,"category":"Leadership Moves","summary":"Jane made partner.","importance":0.7}]'
     )
     curated, ti, to = curate_news(client, "Jane", "Acme", mentions)
-    assert ti == 12 and to == 6
-    assert curated[0].category == "Funding & Deals" and curated[0].importance == 0.9
-    assert curated[0].summary == "Acme closed a $1B fund."
-    assert curated[1].category == "Leadership Moves"
+    assert ti == 12 and to == 6 and len(curated) == 2
+    assert curated[0].category == "Market Views"          # sorted by importance desc
+    assert curated[0].importance == 0.8
 
 
-def test_client_bad_category_falls_back():
+def test_show_false_is_dropped():
+    mentions = [_mention("2026-05-21 — Acme launches a product", "snip")]
+    client = _client('[{"index":0,"show":false,"category":"Company News","summary":"x","importance":0.9}]')
+    assert curate_news(client, "Jane", "Acme", mentions)[0] == []
+
+
+def test_company_news_category_is_excluded_even_if_shown():
+    mentions = [_mention("2026-05-21 — Acme opens a London office", "snip")]
+    client = _client('[{"index":0,"show":true,"category":"Company News","summary":"x","importance":0.9}]')
+    assert curate_news(client, "Jane", "Acme", mentions)[0] == []
+
+
+def test_below_importance_threshold_dropped():
+    mentions = [_mention("2026-05-21 — Jane quoted in passing", "snip")]
+    client = _client('[{"index":0,"show":true,"category":"Market Views","summary":"x","importance":0.3}]')
+    assert curate_news(client, "Jane", "Acme", mentions)[0] == []
+
+
+def test_invalid_category_dropped():
     mentions = [_mention("2026-05-21 — X", "snip")]
-    client = _client('[{"index":0,"category":"Sports","summary":"y","importance":2.0}]')
-    curated, _, _ = curate_news(client, "Jane", "Acme", mentions)
-    assert curated[0].category == "Company News"   # invalid category -> neutral
-    assert curated[0].importance == 1.0            # clamped to [0,1]
+    client = _client('[{"index":0,"show":true,"category":"Sports","summary":"y","importance":0.9}]')
+    assert curate_news(client, "Jane", "Acme", mentions)[0] == []
 
 
-def test_client_error_falls_back_per_article():
+def test_model_error_returns_empty():
     def boom(**_):
         raise RuntimeError("nope")
     client = SimpleNamespace(messages=SimpleNamespace(create=boom))
     mentions = [_mention("2026-05-21 — X", "snip")]
-    curated, ti, to = curate_news(client, "Jane", "Acme", mentions)
-    assert ti == 0 and to == 0
-    assert curated[0].category == "Company News" and curated[0].summary == "snip"
+    assert curate_news(client, "Jane", "Acme", mentions) == ([], 0, 0)
+
+
+def test_per_person_cap_keeps_top_three():
+    mentions = [_mention(f"2026-05-2{i} — Jane item {i}", "s") for i in range(5)]
+    verdicts = ",".join(
+        f'{{"index":{i},"show":true,"category":"Market Views","summary":"s {i}","importance":{0.6 + i * 0.05}}}'
+        for i in range(5)
+    )
+    curated, _, _ = curate_news(_client(f"[{verdicts}]"), "Jane", "Acme", mentions)
+    assert len(curated) == 3                       # capped
+    assert curated[0].importance >= curated[1].importance >= curated[2].importance
 
 
 # --- news_items: pull press-worthy public_links, not just news_mention --------
@@ -115,10 +133,25 @@ def test_news_items_keeps_news_mention_and_links_together():
     assert {c.claim_type for c in items} == {"news_mention", "public_links"}
 
 
-def test_curate_promotes_public_link_to_feed():
-    """A press-worthy public_link with no client still yields a curated row."""
+def test_news_items_drops_boilerplate_titles():
+    """Firm/profile boilerplate is never news, even on a content host."""
+    claims = [
+        _link("Meet Our Team", "https://www.sageadvisory.com/team"),
+        _link("[PDF] Form ADV Part 2B", "https://www.sageadvisory.com/adv.pdf"),
+        _link("Company Overview", "https://www.sageadvisory.com/about"),
+        _link("Komson on the ETF outlook", "https://www.etf.com/podcasts/x"),  # kept
+    ]
+    items = news_items(claims)
+    assert len(items) == 1
+    assert items[0].value == "Komson on the ETF outlook"
+
+
+def test_curate_promotes_public_link_with_editor_approval():
+    """A press-worthy public_link the editor approves (show + importance) is kept."""
     claims = [_link("Podcast on ETFs", "https://www.etf.com/podcasts/x")]
-    curated, _, _ = curate_news(None, "Jane", "Sage", claims)
+    client = _client('[{"index":0,"show":true,"category":"Market Views","summary":"Jane on ETFs","importance":0.8}]')
+    curated, _, _ = curate_news(client, "Jane", "Sage", claims)
     assert len(curated) == 1
     assert curated[0].headline == "Podcast on ETFs"
     assert curated[0].source_host == "etf.com"
+    assert curated[0].category == "Market Views"

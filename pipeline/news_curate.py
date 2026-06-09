@@ -18,8 +18,14 @@ from urllib.parse import urlparse
 from anthropic import Anthropic
 
 from enrichment_store import ClaimRow
-from news_store import DEFAULT_CATEGORY, NEWS_CATEGORIES, CuratedNews
+from news_store import NEWS_CATEGORIES, CuratedNews
 from structuring import HAIKU_MODEL
+
+# The feed shows only PERSON-centric categories — "Company News" (about the firm,
+# not the person) is excluded entirely, per the editorial bar.
+_FEED_CATEGORIES = tuple(c for c in NEWS_CATEGORIES if c != "Company News")
+# Hard cap per person so one media-active alumnus can't dominate the feed.
+MAX_NEWS_PER_PERSON = 3
 
 _DATE_SEP = " — "  # matches web/lib/news.ts NEWS_DATE_SEP
 
@@ -41,6 +47,30 @@ _DIRECTORY_HOSTS = frozenset({
 })
 
 
+# An item only earns a slot in the feed if the model says show=True AND it clears
+# this importance bar. The feed is meant to be SCARCE — most people have nothing
+# genuinely newsworthy, and that's fine. Tune up to be stricter.
+NEWS_MIN_IMPORTANCE = 0.55
+
+# Title patterns for firm boilerplate, directory listings, and filings — pages that
+# are NOT "about the person doing something", just their name on a corporate/profile
+# page. Dropped before the model so they never reach the feed (and don't cost tokens).
+_BOILERPLATE_TITLE_KW = (
+    "meet our team", "our team", "meet the team", "team members", "our people",
+    "leadership team", "management team", "company overview", "about us",
+    "about the firm", "company profile", "firm overview", "our firm", "culture",
+    "careers", "join our team", "staff directory", "employee directory",
+    "form adv", "brochure supplement", "part 2b", "prospectus", "fact sheet",
+    "annual report", "press kit", "media kit", "[pdf]", "contact us",
+    "privacy policy", "terms of service",
+)
+
+
+def _is_boilerplate_title(title: str) -> bool:
+    t = (title or "").lower()
+    return any(kw in t for kw in _BOILERPLATE_TITLE_KW)
+
+
 def _is_press_worthy_link(host: str) -> bool:
     """A public_links host counts as a press mention only if it's neither a social
     network nor a people-directory aggregator (those are profiles, not news)."""
@@ -54,6 +84,8 @@ def news_items(claims: list[ClaimRow]) -> list[ClaimRow]:
     genuine content source (not a social profile or directory listing)."""
     items: list[ClaimRow] = []
     for c in claims:
+        if _is_boilerplate_title(c.value):
+            continue  # firm/profile boilerplate is never news
         if c.claim_type == "news_mention":
             items.append(c)
         elif c.claim_type == "public_links" and _is_press_worthy_link(_host(c.source_url)):
@@ -80,25 +112,37 @@ def _host(url: str) -> str:
         return ""
 
 
-_SYSTEM = """You are a financial-news editor curating press mentions of one \
-finance/investing professional (a Titans of Investing alumnus). For each article \
-you are given its headline and a snippet. Do three things per article:
+_SYSTEM = """You are a SELECTIVE financial-news editor. Your job is to keep the \
+feed scarce and high-signal: show ONLY items that are genuinely about THIS person \
+— what they personally said, did, were recognized for, or a career move they made. \
+Most candidates should be cut. It is completely fine to keep nothing.
 
-1. category — choose EXACTLY ONE, copied verbatim:
-   - "Funding & Deals" (fund closes, raises, acquisitions, investments)
-   - "Leadership Moves" (hires, promotions, new roles, board seats, departures)
-   - "Market Views" (their commentary, outlook, opinion, interviews on markets)
-   - "Recognition" (awards, rankings, honors, "40 under 40")
-   - "Company News" (anything else about their firm or them)
-2. summary — ONE plain sentence (max ~25 words) capturing what's newsworthy. No \
-hype, no preamble. If the snippet is too thin, summarize the headline.
-3. importance — a float 0.0-1.0: how genuinely important/interesting this is for \
-a reader scanning the cohort's news (a fund close or major promotion is high; a \
-passing name-drop is low).
+For each candidate (headline + snippet), decide four things:
 
-Return ONLY a JSON array, one object per article, SAME order:
-[{"index": <int>, "category": "<one of the five>", "summary": "<one line>", \
-"importance": <float>}]"""
+1. show — boolean. TRUE only if the item is ABOUT THIS PERSON specifically and \
+worth a reader's attention: their interview/podcast/commentary, an award or \
+ranking naming them, their hire/promotion/new role, a deal THEY led or are quoted \
+on. Set FALSE for:
+   - news about their COMPANY that isn't about them (product launches, the firm's \
+deals, "what the company is doing")
+   - profile/directory/listing pages, "team" pages, bios, regulatory filings
+   - passing name-drops, generic PR, anything where they are not the subject
+   When in doubt, set show=false.
+2. category — choose EXACTLY ONE, copied verbatim:
+   - "Funding & Deals" (a deal THEY led / are quoted on)
+   - "Leadership Moves" (THEIR hire, promotion, new role, board seat, departure)
+   - "Market Views" (THEIR commentary, outlook, interview, podcast)
+   - "Recognition" (an award/ranking/honor naming THEM)
+   - "Company News" (about the firm, not them — almost always pair with show=false)
+3. summary — ONE plain sentence (max ~25 words), leading with the PERSON, on what \
+they did or said. No hype, no preamble.
+4. importance — float 0.0-1.0: how notable this is (a fund close, a major \
+promotion, a named ranking is high; a routine quote is mid; anything you'd set \
+show=false on is low).
+
+Return ONLY a JSON array, one object per candidate, SAME order:
+[{"index": <int>, "show": <bool>, "category": "<one of the five>", \
+"summary": "<one line>", "importance": <float>}]"""
 
 
 def _build_user(name: str, employer: str, articles: list[tuple[str, str]]) -> str:
@@ -190,12 +234,20 @@ def curate_news(
 
     curated: list[CuratedNews] = []
     for i, ((date, headline), claim) in enumerate(zip(articles, items)):
-        verdict = parsed.get(i, {})
+        verdict = parsed.get(i)
+        # No model judgment, or the editor said don't show -> drop. The feed is
+        # deliberately scarce; an item earns its slot, it isn't shown by default.
+        if not verdict or not bool(verdict.get("show")):
+            continue
         category = verdict.get("category")
-        if category not in NEWS_CATEGORIES:
-            category = DEFAULT_CATEGORY
+        # Only person-centric categories make the feed; "Company News" (about the
+        # firm, not the person) and any unrecognized label are dropped.
+        if category not in _FEED_CATEGORIES:
+            continue
+        importance = _clamp_importance(verdict.get("importance"), 0.0)
+        if importance < NEWS_MIN_IMPORTANCE:
+            continue
         summary = str(verdict.get("summary") or "").strip() or claim.quote or headline
-        importance = _clamp_importance(verdict.get("importance"), 0.5)
         curated.append(CuratedNews(
             headline=headline,
             summary=summary,
@@ -205,4 +257,6 @@ def curate_news(
             source_host=_host(claim.source_url),
             importance=importance,
         ))
-    return curated, tok_in, tok_out
+    # Best first, and cap per person so one media-active alumnus can't flood the feed.
+    curated.sort(key=lambda c: c.importance, reverse=True)
+    return curated[:MAX_NEWS_PER_PERSON], tok_in, tok_out
