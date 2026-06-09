@@ -218,6 +218,10 @@ def _confidence(claim: ClaimRow) -> float:
 _JUNK_VALUES = frozenset({
     "true", "false", "yes", "no", "none", "null", "n/a", "na",
     "unknown", "n.a.", "tbd", "-", "—",
+    # placeholder phrases an LLM emits for an unknown field instead of omitting it
+    "location data unavailable", "location unavailable", "data unavailable",
+    "not available", "not specified", "not found", "no data",
+    "unavailable", "undisclosed", "unspecified",
 })
 
 

@@ -36,6 +36,23 @@ EXTRACTION_METHOD = "firecrawl-linkedin"
 # lookup (namesake risk), so it sits just under a verified PDL likelihood match.
 LINKEDIN_CONFIDENCE = 0.8
 
+# The agent is BILLED and variable (observed 45–324 credits/call), so cap each run
+# and only fire it when the profile is still thin. A rich profile would just get a
+# duplicate of what PDL already gave.
+DEFAULT_MAX_CREDITS = 60
+LINKEDIN_MIN_CAREER = 3
+
+
+def profile_needs_linkedin(claims, *, min_career: int = LINKEDIN_MIN_CAREER) -> bool:
+    """True when Firecrawl-scrape + PDL have NOT yet produced a complete-enough
+    profile — i.e. a whole section is missing or roles are sparse. Section-level,
+    not year-gap: missing current employer, no education, or < min_career roles.
+    A complete profile returns False so we skip the (billed) agent."""
+    career = sum(1 for c in claims if c.claim_type == "career_history")
+    has_employer = any(c.claim_type == "current_employer" for c in claims)
+    has_education = any(c.claim_type == "education" for c in claims)
+    return (not has_employer) or (not has_education) or (career < min_career)
+
 # JSON schema constraining the agent's output to a structured profile.
 _SCHEMA = {
     "type": "object",
@@ -196,15 +213,22 @@ def fetch_linkedin(
     employer: str = "",
     city: str = "",
     timeout: int = 120,
+    max_credits: int | None = DEFAULT_MAX_CREDITS,
 ) -> LinkedInResult:
     """Run one Firecrawl agent LinkedIn lookup for a person. Returns mapped claims
-    plus the credits spent. Propagates PaymentRequiredError (so the caller logs
-    "no credits" like the other Firecrawl passes); swallows every other error to
-    an empty result."""
+    plus the credits spent. `max_credits` caps the (variable, sometimes spiking)
+    agent spend per call. Propagates PaymentRequiredError (so the caller logs "no
+    credits" like the other Firecrawl passes); swallows every other error to an
+    empty result."""
     if not name.strip():
         return _EMPTY
     try:
-        resp = client.agent(prompt=build_prompt(name, employer, city), schema=_SCHEMA, timeout=timeout)
+        resp = client.agent(
+            prompt=build_prompt(name, employer, city),
+            schema=_SCHEMA,
+            timeout=timeout,
+            max_credits=max_credits,
+        )
     except PaymentRequiredError:
         raise
     except Exception:

@@ -25,7 +25,7 @@ from db import connect
 from discovery import discover_news
 from enrichment_store import ClaimRow, replace_claims
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
-from linkedin_firecrawl import fetch_linkedin
+from linkedin_firecrawl import fetch_linkedin, profile_needs_linkedin
 from mention_discovery import discover_mentions
 from news_enrich import extract_news_mentions
 from normalize import digest_claims
@@ -84,6 +84,26 @@ def run(name: str | None) -> int:
 
                 print(f"=== {full_name} | {company} ===")
 
+                # Load the EXISTING profile up front: it's needed both to decide
+                # whether the (billed) LinkedIn agent is worth running and to merge
+                # at the end. Loading once avoids a second query.
+                existing_rows = conn.execute(
+                    "SELECT claim_type, value, source_url, quote, confidence, "
+                    "extraction_method FROM claims WHERE person_id = ?",
+                    (pid,),
+                ).fetchall()
+                existing = [
+                    ClaimRow(
+                        claim_type=r["claim_type"],
+                        value=r["value"],
+                        source_url=r["source_url"],
+                        quote=r["quote"] or "",
+                        confidence=r["confidence"],
+                        extraction_method=r["extraction_method"],
+                    )
+                    for r in existing_rows
+                ]
+
                 # ── PDL ──────────────────────────────────────────────────────
                 if pdl_key:
                     pdl = enrich_pdl(
@@ -111,18 +131,25 @@ def run(name: str | None) -> int:
                 if verified_employer:
                     print(f"  Using verified profile: {verified_title or '(no title)'} @ {verified_employer}")
 
-                # ── Firecrawl agent LinkedIn (core source) ───────────────────
-                try:
-                    li = fetch_linkedin(firecrawl, full_name,
-                                        employer=verified_employer or company, city=city)
-                    if li.claim_rows:
-                        new_claims.extend(li.claim_rows)
-                        print(f"  LinkedIn: {len(li.claim_rows)} claims "
-                              f"({li.credits_used} credits)")
-                    else:
-                        print("  LinkedIn: no confident profile found")
-                except PaymentRequiredError:
-                    print("  LinkedIn: skipped — no Firecrawl credits")
+                # ── Firecrawl agent LinkedIn (gap-filling, billed) ───────────
+                # Fire the agent ONLY when the combined profile (existing + the
+                # PDL claims just gathered) is still thin — missing employer, no
+                # education, or < 3 roles. A complete profile would only get a
+                # duplicate, so we skip and save the (45–324) credits.
+                if not profile_needs_linkedin(existing + new_claims):
+                    print("  LinkedIn: profile already complete — skipped (saved credits)")
+                else:
+                    try:
+                        li = fetch_linkedin(firecrawl, full_name,
+                                            employer=verified_employer or company, city=city)
+                        if li.claim_rows:
+                            new_claims.extend(li.claim_rows)
+                            print(f"  LinkedIn: {len(li.claim_rows)} claims "
+                                  f"({li.credits_used} credits)")
+                        else:
+                            print("  LinkedIn: no confident profile found")
+                    except PaymentRequiredError:
+                        print("  LinkedIn: skipped — no Firecrawl credits")
 
                 # ── Firecrawl press news ─────────────────────────────────────
                 try:
@@ -163,25 +190,9 @@ def run(name: str | None) -> int:
                     print("  Mentions: PERPLEXITY_API_KEY not set — skipped")
 
                 # ── Persist ──────────────────────────────────────────────────
-                # Load ALL existing claims, merge with new, normalize case,
+                # Merge existing (loaded above) with new, normalize case,
                 # deduplicate, then replace the full set. No leftover stale
                 # rows, no duplicates, every re-run produces a clean profile.
-                existing_rows = conn.execute(
-                    "SELECT claim_type, value, source_url, quote, confidence, "
-                    "extraction_method FROM claims WHERE person_id = ?",
-                    (pid,),
-                ).fetchall()
-                existing = [
-                    ClaimRow(
-                        claim_type=r["claim_type"],
-                        value=r["value"],
-                        source_url=r["source_url"],
-                        quote=r["quote"] or "",
-                        confidence=r["confidence"],
-                        extraction_method=r["extraction_method"],
-                    )
-                    for r in existing_rows
-                ]
                 # Reconcile the full set (existing + new) so multi-source résumé
                 # facts collapse semantically before the deterministic digest.
                 reconciled, _, _ = reconcile_claims(anthropic, full_name, existing + new_claims)
