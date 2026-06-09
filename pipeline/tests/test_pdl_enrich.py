@@ -53,7 +53,8 @@ def _full_record() -> dict:
                 },
             ],
             "education": [
-                {"school": {"name": "Rice University"}, "degrees": ["MBA"]},
+                {"school": {"name": "Rice University"}, "degrees": ["MBA"],
+                 "end_date": "2009-05"},
             ],
             "profiles": [
                 {"network": "twitter", "url": "twitter.com/janedoe"},
@@ -87,6 +88,9 @@ def test_confident_match_maps_canonical_claims() -> None:
     assert by_type["location"][0].value == "Austin, Texas"
     assert len(by_type["career_history"]) == 2
     assert by_type["education"][0].value == "MBA from Rice University"
+    # End year goes in the quote so grad-year derivation gets a VERIFIED year
+    # while the display value stays clean.
+    assert by_type["education"][0].quote == "Graduated 2009"
     # LinkedIn promoted to a full URL; the duplicate linkedin profile is dropped,
     # leaving the LinkedIn link plus the non-linkedin twitter profile.
     link_urls = {r.source_url for r in by_type["public_links"]}
