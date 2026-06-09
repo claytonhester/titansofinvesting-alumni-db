@@ -186,17 +186,31 @@ export default function InsightsViews(props: InsightsViewsProps) {
             <div className="panel col-6">
               <div className="insight-synthesis-head">
                 <h3>Where they start</h3>
-                <span className="col-tag">first employer · measured</span>
+                <span className="col-tag">first employer · verified</span>
               </div>
-              <FirmList firms={props.startFirms} />
+              {props.startFirms.length > 0 ? (
+                <FirmList firms={props.startFirms} />
+              ) : (
+                <EmptyState
+                  title="No first employers yet"
+                  note="We don't assume the directory's listed company is a real first job. First post-grad employers are confirmed during enrichment."
+                />
+              )}
             </div>
 
             <div className="panel col-6">
               <div className="insight-synthesis-head">
                 <h3>Where their first jobs cluster</h3>
-                <span className="col-tag">first-employer sector · measured</span>
+                <span className="col-tag">first-employer sector · verified</span>
               </div>
-              <Bars rows={sectorRows} />
+              {sectorRows.length > 0 ? (
+                <Bars rows={sectorRows} />
+              ) : (
+                <EmptyState
+                  title="No first-job sectors yet"
+                  note="Built from verified first employers — appears as alumni are enriched."
+                />
+              )}
             </div>
 
             <div className="panel col-12">
