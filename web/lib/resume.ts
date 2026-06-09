@@ -1,7 +1,7 @@
 import type { Claim, Person } from "./db";
 import { smartTitle } from "./normalize";
 import { groupEducation, type EducationGroup } from "./education";
-import { usefulLinks } from "./link-quality";
+import { isLowValueSourceUrl, usefulLinks } from "./link-quality";
 
 export interface ExperienceEntry {
   title: string;
@@ -567,7 +567,7 @@ export function buildResume(person: Person, claims: Claim[]): Resume {
 
   const sources = Array.from(
     new Set(verified.map((c) => c.source_url).filter(Boolean))
-  );
+  ).filter((url) => !isLowValueSourceUrl(url));
 
   const avgConfidence = verified.length
     ? verified.reduce((sum, c) => sum + c.confidence, 0) / verified.length
