@@ -197,9 +197,9 @@ def _map_claims(data: dict, confidence: float, source_url: str) -> list[ClaimRow
     exact value/quote shapes web/lib/resume.ts already parses."""
     rows: list[ClaimRow] = []
 
-    title = _clean(data.get("job_title"))
-    employer = _clean(data.get("job_company_name"))
-    location = _clean(data.get("location_name"))
+    title = _field(data.get("job_title"))
+    employer = _field(data.get("job_company_name"))
+    location = _field(data.get("location_name"))
 
     if title:
         rows.append(_claim("current_title", title, source_url, "", confidence))
@@ -432,6 +432,23 @@ def _clean(value: object) -> str:
     if value is None or isinstance(value, bool):
         return ""
     return str(value).strip()
+
+
+# Plan-gating placeholders: besides booleans, a gated field can echo its own LABEL
+# as the value (a live case: location_name -> "Location", shown as the person's
+# city). A structured field whose value IS just the field name is never real data.
+_PLACEHOLDER_VALUES = frozenset({
+    "location", "title", "employer", "company", "name",
+    "current title", "current employer", "job title", "job company",
+})
+
+
+def _field(value: object) -> str:
+    """Clean a structured PDL field, additionally rejecting a plan-gated label echo
+    ('Location', 'Title', ...) that is not a real value. Use for the discrete
+    identity fields (title/employer/location) where such an echo would ship."""
+    cleaned = _clean(value)
+    return "" if cleaned.lower() in _PLACEHOLDER_VALUES else cleaned
 
 
 def _as_int(value: object) -> int:
