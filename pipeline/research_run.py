@@ -65,7 +65,8 @@ def _load_people(conn, name: str | None) -> list[dict]:
                MAX(CASE WHEN c.claim_type='current_employer' THEN c.value END) AS employer,
                MAX(CASE WHEN c.claim_type='location'         THEN 1 ELSE 0 END) AS has_location,
                MAX(CASE WHEN c.claim_type='current_employer' THEN 1 ELSE 0 END) AS has_employer,
-               MAX(CASE WHEN c.claim_type='current_title'    THEN 1 ELSE 0 END) AS has_title
+               MAX(CASE WHEN c.claim_type='current_title'    THEN 1 ELSE 0 END) AS has_title,
+               (SELECT COUNT(*) FROM news_curated n WHERE n.person_id = p.id) AS curated_count
         FROM people p
         JOIN claims c ON c.person_id = p.id
     """
@@ -114,6 +115,9 @@ def main() -> int:
     ap.add_argument("--limit", type=int, metavar="N", help="alias for --pilot")
     ap.add_argument("--no-sonar", action="store_true", help="skip Perplexity press discovery")
     ap.add_argument("--no-pdl", action="store_true", help="skip PDL gap-fill")
+    ap.add_argument("--skip-curated", action="store_true",
+                    help="skip people who ALREADY have curated news — never re-curate "
+                         "(and possibly regress) a feed built by a stronger fetcher")
     ap.add_argument("--max-usd", type=float, default=3.0, help="hard cost cap (default 3.0)")
     ap.add_argument("--db", default=str(DB_PATH))
     args = ap.parse_args()
@@ -124,6 +128,10 @@ def main() -> int:
 
     with connect(Path(args.db)) as conn:
         people = _load_people(conn, args.name)
+    if args.skip_curated:
+        before = len(people)
+        people = [p for p in people if not p["curated_count"]]
+        print(f"--skip-curated: {before - len(people)} people with existing news left untouched")
     if cap:
         people = people[:cap]
     if not people:
