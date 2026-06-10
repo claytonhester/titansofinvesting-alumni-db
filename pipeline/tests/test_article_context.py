@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from article_context import name_window
+from article_context import name_mention_count, name_window
 
 
 @pytest.mark.unit
@@ -45,3 +45,31 @@ def test_window_falls_back_to_last_name() -> None:
 @pytest.mark.unit
 def test_empty_text_is_safe() -> None:
     assert name_window("", "Jane Doe") == ""
+
+
+@pytest.mark.unit
+def test_mention_count_counts_full_name_and_last_name() -> None:
+    # A profile subject is named repeatedly (full name + bare surname).
+    text = "Jane Doe leads the fund. Doe joined in 2010. Doe says markets are calm."
+    assert name_mention_count(text, "Jane Doe") == 3   # surname appears 3x
+
+
+@pytest.mark.unit
+def test_mention_count_single_namedrop_is_one() -> None:
+    # The Ross case: named exactly once inside someone else's dream-team answer.
+    text = ("2016 Forty Under Forty. Chris Halaska, CIO. " + ("filler " * 400) +
+            "My dream team: Kris Chikelue, Ross Willmann, Danielle Villarreal.")
+    assert name_mention_count(text, "Ross Willmann") == 1
+
+
+@pytest.mark.unit
+def test_mention_count_surname_substring_does_not_inflate() -> None:
+    # "list" must not count toward surname "Li"; whole-word only.
+    text = "The list of attendees is long. The shortlist was published. A listing."
+    assert name_mention_count(text, "Wei Li") == 0
+
+
+@pytest.mark.unit
+def test_mention_count_empty_inputs_are_zero() -> None:
+    assert name_mention_count("", "Jane Doe") == 0
+    assert name_mention_count("some text", "") == 0

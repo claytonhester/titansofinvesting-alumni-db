@@ -67,6 +67,31 @@ _SIGNAL_KW = (
 )
 
 
+def name_mention_count(text: str, name: str) -> int:
+    """How many times the person is named in the article — the larger of full-name
+    and whole-word last-name hits, case-insensitive.
+
+    A profile/feature subject (or a real list honoree with their own entry) is named
+    REPEATEDLY; someone named only once in a long article was almost certainly
+    name-dropped inside someone else's story — the Ross Willmann / Forty-Under-Forty
+    misattribution, where Ross appears exactly once in Chris Halaska's "dream team"
+    answer. The curator uses this count as a deterministic precision signal. Whole-word
+    matching keeps a common surname substring (the "li" in "list") from inflating it.
+    Never raises; 0 on empty input."""
+    if not text or not name:
+        return 0
+    lowered = text.lower()
+    parts = [p for p in re.split(r"\s+", name.strip()) if p]
+    if not parts:
+        return 0
+    counts = [lowered.count(" ".join(parts).lower())]
+    if len(parts) >= 2:
+        last = parts[-1].lower()
+        if len(last) > 2:
+            counts.append(len(re.findall(r"\b" + re.escape(last) + r"\b", lowered)))
+    return max(counts)
+
+
 def _first_index(lowered: str, needles: tuple[str, ...]) -> int:
     for n in needles:
         i = lowered.find(n)

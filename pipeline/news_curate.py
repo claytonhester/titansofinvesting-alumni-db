@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from anthropic import Anthropic
 
-from article_context import name_window
+from article_context import name_mention_count, name_window
 from directory_hosts import (
     DIRECTORY_HOSTS,
     PUBLIC_RECORDS_HOSTS,
@@ -70,6 +70,17 @@ _DEPTH_RANK = {"feature": 1.0, "substantive": 0.0}
 # A shown item must also clear this importance bar. The feed is meant to be SCARCE —
 # most people have nothing genuinely newsworthy, and that's fine. Tune up to be stricter.
 NEWS_MIN_IMPORTANCE = 0.5
+
+# Deterministic precision guard for the verification stage. A fetched article this
+# long that names the person only ONCE is almost certainly name-dropped inside
+# someone else's story — the Ross Willmann / Forty-Under-Forty case, where Ross is
+# named once in Chris Halaska's "dream team" answer on a long award-list page. The
+# LLM verifier was fooled because the page HEAD is the list title (not the honoree's
+# name); the mention count is the signal that survives a noisy page. A real listee or
+# feature subject is named repeatedly, so this never drops a genuine item. Short
+# articles fall through to the LLM (a one-line quote page legitimately names once).
+_LONG_ARTICLE_CHARS = 4000
+_MIN_MENTIONS_LONG = 2
 
 # Title patterns for firm boilerplate, directory listings, and filings — pages that
 # are NOT "about the person doing something", just their name on a corporate/profile
@@ -298,6 +309,10 @@ target is named only inside that person's answers, quotes, or "dream team" list,
 that is "not_about" — they did NOT receive the award. Ask: does the page present \
 THIS person as one of its own honorees/subjects, or is it someone else's page that \
 merely names them? When genuinely unsure, choose "not_about".
+   MENTION COUNT: you are told how many times the person is named in the FULL \
+article. The subject of a profile/feature, or a real entry on a list, is named \
+REPEATEDLY. If a long article names them only ONCE, they were almost certainly \
+name-dropped inside someone else's story -> "not_about".
 2. headline — a SHORT, accurate title taken from the article (e.g. the exact award \
 + category + year, or the real event). If the given headline is already accurate, \
 reuse it. Never use a bare "Name - Title, Company" profile heading as the headline \
@@ -317,7 +332,8 @@ Return ONLY JSON: {"subject_depth":"..","headline":"..","category":"..","summary
 
 
 def _build_verify_user(
-    name: str, employer: str, headline: str, snippet: str, article: str
+    name: str, employer: str, headline: str, snippet: str, article: str,
+    mentions: int = 0,
 ) -> str:
     lines = [
         f"Person: {name}",
@@ -326,6 +342,8 @@ def _build_verify_user(
     ]
     if snippet:
         lines.append(f"Snippet: {snippet[:300]}")
+    if mentions:
+        lines.append(f"The person is named {mentions} time(s) in the full article.")
     if article:
         lines.append("")
         lines.append("ARTICLE TEXT (around where the person is named):")
@@ -347,6 +365,7 @@ def _verify_item(
     *,
     model: str,
     max_tokens: int,
+    mentions: int = 0,
 ) -> tuple[tuple[float, CuratedNews] | None, int, int]:
     """Confirm one would-be-shown item against the article. Returns (kept, in, out)
     where kept is a (rank, CuratedNews) to keep or None to drop.
@@ -369,7 +388,7 @@ def _verify_item(
             temperature=0,
             system=[{"type": "text", "text": _VERIFY_SYSTEM, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": _build_verify_user(
-                name, employer, item.headline, snippet, article
+                name, employer, item.headline, snippet, article, mentions
             )}],
         )
         text = "".join(b.text for b in resp.content if b.type == "text")
@@ -512,10 +531,20 @@ def curate_news(
     if fetch_article is not None and client is not None:
         verified: list[tuple[float, CuratedNews]] = []
         for rank, item, snippet in curated[: MAX_NEWS_PER_PERSON + 2]:
-            article = name_window(fetch_article(item.source_url), name)
+            raw = fetch_article(item.source_url)
+            mentions = name_mention_count(raw, name)
+            # Deterministic name-drop guard: a long article that names the person
+            # only once is almost certainly someone else's story (the Ross / 40u40
+            # case). Drop without spending a verify call — the LLM was fooled here
+            # because the page HEAD is the list title, not the honoree. (`raw` is
+            # capped at http_fetch._MAX_CHARS; a real feature/listee names its subject
+            # in the headline/lead — well within the cap — so the count is reliable.)
+            if raw and len(raw) >= _LONG_ARTICLE_CHARS and mentions < _MIN_MENTIONS_LONG:
+                continue
+            article = name_window(raw, name)
             kept, vin, vout = _verify_item(
                 client, name, employer, rank, item, snippet, article,
-                model=model, max_tokens=512,
+                model=model, max_tokens=512, mentions=mentions,
             )
             tok_in += vin
             tok_out += vout

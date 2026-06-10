@@ -196,6 +196,44 @@ def test_verify_drops_item_when_article_fetch_fails():
     assert curated == []
 
 
+def test_verify_drops_long_article_naming_person_once():
+    """Deterministic guard: the triage AND a fooled LLM both say substantive, but the
+    fetched article is long and names the person exactly ONCE — they were name-dropped
+    inside someone else's story (Ross / Forty-Under-Forty). Dropped before/without
+    trusting the verify verdict."""
+    mentions = [_mention("2016-01-01 — 2016 Forty Under Forty", "names Ross in a blurb")]
+    triage = '[{"index":0,"subject_depth":"substantive","category":"Recognition","summary":"Ross named to 40u40","importance":0.7}]'
+    # Even if the verifier were fooled into "substantive", the guard fires first.
+    verify = '{"subject_depth":"substantive","headline":"2016 Forty Under Forty","category":"Recognition","summary":"x","importance":0.7}'
+    long_page = ("2016 Forty Under Forty. Chris Halaska, CIO of Memorial Hermann. " +
+                 ("Halaska discusses his team and strategy. " * 200) +
+                 "His dream team: Kris Chikelue, Ross Willmann, Danielle Villarreal.")
+    assert len(long_page) >= 4000
+    client = _two_phase_client(triage, verify)
+    curated, _, _ = curate_news(
+        client, "Ross Willmann", "Warwick", mentions,
+        fetch_article=lambda url: long_page,
+    )
+    assert curated == []
+
+
+def test_verify_keeps_long_article_naming_person_repeatedly():
+    """The guard must NOT drop a genuine subject: a long article that names the person
+    repeatedly passes through to the (approving) verifier."""
+    mentions = [_mention("2026-01-01 — Profile of Jane Doe", "a feature on Jane")]
+    triage = '[{"index":0,"subject_depth":"feature","category":"Market Views","summary":"Jane profile","importance":0.8}]'
+    verify = '{"subject_depth":"feature","headline":"Profile of Jane Doe","category":"Market Views","summary":"Jane Doe on her macro outlook.","importance":0.8}'
+    long_page = ("Jane Doe is the CIO. " + ("Doe says markets are calm. " * 200) +
+                 "Jane Doe closed her fund.")
+    assert len(long_page) >= 4000
+    client = _two_phase_client(triage, verify)
+    curated, _, _ = curate_news(
+        client, "Jane Doe", "Acme", mentions,
+        fetch_article=lambda url: long_page,
+    )
+    assert len(curated) == 1
+
+
 def test_verify_keeps_item_when_fetch_succeeds_but_model_call_fails():
     """A successful fetch followed by a transient LLM error is NOT the same as never
     reading the article: we keep the triage verdict conservatively so an LLM 429
