@@ -141,6 +141,29 @@ def test_plan_gated_boolean_fields_emit_no_claim() -> None:
     assert values_by_type.get("current_employer") == "Apex Capital"  # real fields still map
 
 
+def test_plan_gated_label_echo_emits_no_claim() -> None:
+    """A gated field can echo its own LABEL as the value — a live case shipped
+    location='Location' (the field name, shown as the person's city). A structured
+    field whose value IS just the field name is not data and must be dropped."""
+    record = {
+        "likelihood": 9,
+        "data": {
+            "job_title": "Title",                  # label echo
+            "job_company_name": "Apex Capital",     # real
+            "location_name": "Location",            # label echo (the live bug)
+        },
+    }
+    client = _client(lambda req: httpx.Response(200, json=record))
+    result = enrich_pdl(
+        client, "key", "Jane Doe", "Apex Capital", "Austin",
+        cost_usd_per_match=_PER_MATCH,
+    )
+    values_by_type = {r.claim_type: r.value for r in result.claim_rows}
+    assert "location" not in values_by_type           # 'Location' rejected
+    assert "current_title" not in values_by_type       # 'Title' rejected
+    assert values_by_type.get("current_employer") == "Apex Capital"  # real field still maps
+
+
 @pytest.mark.unit
 def test_extracts_skills_and_certifications_as_claims() -> None:
     client = _client(lambda req: httpx.Response(200, json=_full_record()))
