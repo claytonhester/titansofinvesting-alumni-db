@@ -434,6 +434,10 @@ a:hover {
   color: var(--ink);
   max-width: 70ch;
 }
+.insight-narrative strong {
+  font-weight: 650;
+  color: var(--maroon-deep);
+}
 .insight-empty {
   display: flex;
   flex-direction: column;
@@ -1602,4 +1606,155 @@ a.xp-title:hover { text-decoration: underline; text-decoration-color: currentCol
   .resume-actions { align-items: flex-start; width: 100%; }
   .resume-id h1 { font-size: clamp(26px, 7vw, 34px); }
   .company-chip { flex-wrap: wrap; }
+}
+
+/* clickable sector cards + drill-down hint */
+.insight-clickable {
+  cursor: pointer;
+  transition: box-shadow 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+}
+.insight-clickable:hover {
+  box-shadow: var(--shadow-hover);
+  border-color: var(--line-strong);
+}
+.insight-clickable:focus-visible {
+  outline: 2px solid var(--maroon);
+  outline-offset: 2px;
+}
+.insight-viewall {
+  margin-top: 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--maroon-deep);
+  letter-spacing: 0.01em;
+}
+
+/* sector drill-down modal */
+.sector-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(28, 24, 22, 0.34);
+  backdrop-filter: blur(2px);
+}
+.sector-modal {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-hover);
+  width: min(720px, 100%);
+  max-height: min(82vh, 880px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sector-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 24px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.sector-modal-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.sector-modal-sub {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.sector-modal-close {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink-soft);
+  font-size: 13px;
+  cursor: pointer;
+  line-height: 1;
+}
+.sector-modal-close:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+.sector-modal-body {
+  overflow-y: auto;
+  padding: 8px 24px 24px;
+}
+.sector-group {
+  padding-top: 18px;
+}
+.sector-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+.sector-group-name {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--maroon-deep);
+}
+.sector-group-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-faint);
+  background: var(--maroon-tint);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.sector-group-list {
+  display: flex;
+  flex-direction: column;
+}
+.sector-member {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "name tag" "meta tag";
+  gap: 0 12px;
+  padding: 9px 6px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  color: inherit;
+}
+.sector-member:hover {
+  background: var(--maroon-tint);
+}
+.sector-member-name {
+  grid-area: name;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.sector-member-meta {
+  grid-area: meta;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  margin-top: 1px;
+}
+.sector-member-tag {
+  grid-area: tag;
+  align-self: center;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .sector-member-tag { display: none; }
 }

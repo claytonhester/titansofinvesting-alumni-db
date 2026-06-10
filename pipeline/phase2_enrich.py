@@ -603,7 +603,13 @@ def enrich_person(
             years_to_md=years_to_md(clean_rows, gy.year) if flags.reached_md else None,
             num_employers=num_employers(clean_rows),
             has_advanced_degree=has_advanced_degree(edu_texts),
-            current_sector=classify_sector(current_employer_val),
+            # PDL industry is the primary sector signal (authoritative); the
+            # classifier falls back to employer-name keywords. First employers
+            # have no industry on record, so they classify by name alone. The
+            # ambiguous catch-all remainder is upgraded later by the Haiku pass
+            # in reclassify_sectors.py.
+            current_sector=classify_sector(current_employer_val, pdl_attrs.current_industry),
+            first_sector=classify_sector(first_employer),
             left_texas=left_texas(current_location_val),
             # Firm domain from PDL (free) → join key for the cached company layer.
             employer_domain=_company_domain(pdl_attrs.company_website),

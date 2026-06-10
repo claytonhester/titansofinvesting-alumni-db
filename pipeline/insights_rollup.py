@@ -19,6 +19,7 @@ Claim types this reads (see structuring.py / enrichment_store.py):
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -130,6 +131,32 @@ def current_titles(
     """Most common current titles, verbatim, for the display list."""
     counts = _value_counts(conn, "current_title")
     return tuple(TitleCount(title=v, count=n) for v, n in counts[:top])
+
+
+def clean_title_basic(title: str) -> str:
+    """Free, deterministic title tidy-up: strip the employer / product / team /
+    department suffix that follows a dash, an ' at ', or a comma, so raw titles
+    like "Assistant Professor, Department of Pathology" or
+    "... Sales Leader ... - IBM UKI Data Platforms" lose the noise that makes
+    every one unique. Conservative — it only trims trailing context after a
+    delimiter; it never collapses a role's function word (that's the Haiku
+    canonicalizer's job). Returns the original (trimmed) when no delimiter is
+    present. This is the fallback when the LLM omits a title."""
+    t = (title or "").strip()
+    if not t:
+        return ""
+    # Cut at the first place-/product-/department-naming delimiter.
+    for sep in (" - ", " – ", " — ", " @ "):
+        if sep in t:
+            t = t.split(sep, 1)[0].strip()
+    # " at <Employer>" (word boundary, case-insensitive).
+    m = re.search(r"\bat\b", t, flags=re.IGNORECASE)
+    if m and m.start() > 0:
+        t = t[: m.start()].strip()
+    # A trailing ", <department/specialty>" clause.
+    if "," in t:
+        t = t.split(",", 1)[0].strip()
+    return t or (title or "").strip()
 
 
 def classify_seniority_keyword(title: str) -> str:
@@ -312,17 +339,22 @@ def with_llm_narrative(
     *,
     narrative: str,
     seniority: tuple[SeniorityTier, ...] | None = None,
+    current_titles: tuple[TitleCount, ...] | None = None,
     haiku_tokens_in: int = 0,
     haiku_tokens_out: int = 0,
 ) -> InsightsSnapshot:
     """Overlay the billed Haiku outputs onto a deterministic snapshot. Seniority
-    is replaced only if the LLM reclassified it; founders_partners is recomputed
-    from whichever ladder is now in force so the headline stays consistent."""
+    is replaced only if the LLM reclassified it; current_titles is replaced only
+    if the LLM canonicalized it (near-duplicate titles folded together);
+    founders_partners is recomputed from whichever ladder is now in force so the
+    headline stays consistent."""
     new_seniority = seniority if seniority is not None else snap.seniority
+    new_titles = current_titles if current_titles is not None else snap.current_titles
     return replace(
         snap,
         narrative=narrative or snap.narrative,
         seniority=new_seniority,
+        current_titles=new_titles,
         founders_partners=founders_partners_count(new_seniority),
         haiku_tokens_in=haiku_tokens_in,
         haiku_tokens_out=haiku_tokens_out,

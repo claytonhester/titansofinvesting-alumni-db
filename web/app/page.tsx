@@ -105,6 +105,8 @@ export default async function Home({
                 geoSpread={insights.geoSpread}
                 schoolSpread={insights.schoolSpread}
                 measuredSectors={insights.measuredSectors}
+                firstJobMembers={insights.firstJobMembers}
+                landingMembers={insights.landingMembers}
               />
             ),
             build: (
