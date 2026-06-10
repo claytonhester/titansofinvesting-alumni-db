@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { planQuery, type ChatTurn } from "@/lib/chat/plan";
-import { searchPeople } from "@/lib/chat/search";
+import { retrievePeople } from "@/lib/chat/search";
 import { streamAnswer } from "@/lib/chat/synthesize";
 import { checkInput, checkRateShared, checkTopic, rejection } from "@/lib/chat/guards";
 import { isOverCapShared, logTurnShared } from "@/lib/chat/cost-guard";
@@ -89,7 +89,7 @@ export async function POST(req: Request): Promise<Response> {
   try {
     const plan = await planQuery(history);
     planUsage = plan.usage;
-    rows = searchPeople(plan.params);
+    rows = await retrievePeople(plan.params, latest.content);
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Unexpected error";
     // Surface config problems (missing key) clearly; keep other detail private.

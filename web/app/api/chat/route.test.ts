@@ -1,17 +1,17 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const { logTurnShared, isOverCapShared, planQuery, searchPeople, streamAnswer } =
+const { logTurnShared, isOverCapShared, planQuery, retrievePeople, streamAnswer } =
   vi.hoisted(() => ({
     logTurnShared: vi.fn(async () => true),
     isOverCapShared: vi.fn(async () => false),
     planQuery: vi.fn(),
-    searchPeople: vi.fn(() => []),
+    retrievePeople: vi.fn(async () => []),
     streamAnswer: vi.fn(),
   }));
 
 vi.mock("@/lib/chat/cost-guard", () => ({ logTurnShared, isOverCapShared }));
 vi.mock("@/lib/chat/plan", () => ({ planQuery }));
-vi.mock("@/lib/chat/search", () => ({ searchPeople }));
+vi.mock("@/lib/chat/search", () => ({ retrievePeople }));
 vi.mock("@/lib/chat/synthesize", () => ({ streamAnswer }));
 vi.mock("@/lib/chat/guards", () => ({
   checkInput: () => ({ ok: true }),
@@ -43,7 +43,7 @@ async function drain(res: Response): Promise<void> {
 beforeEach(() => {
   vi.clearAllMocks();
   isOverCapShared.mockResolvedValue(false);
-  searchPeople.mockReturnValue([]);
+  retrievePeople.mockResolvedValue([]);
   planQuery.mockResolvedValue({ usage: PLAN_USAGE, params: {} });
 });
 

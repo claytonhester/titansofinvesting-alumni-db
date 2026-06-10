@@ -2,13 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbSearchPeople = vi.fn();
 const claimsForSlugs = vi.fn();
+const peopleBySlugs = vi.fn();
+const semanticRankSlugs = vi.fn();
 
 vi.mock("@/lib/db", () => ({
   searchPeople: (...args: unknown[]) => dbSearchPeople(...args),
   claimsForSlugs: (...args: unknown[]) => claimsForSlugs(...args),
+  peopleBySlugs: (...args: unknown[]) => peopleBySlugs(...args),
 }));
 
-import { searchPeople } from "./search";
+vi.mock("./semantic", () => ({
+  semanticRankSlugs: (...args: unknown[]) => semanticRankSlugs(...args),
+}));
+
+import { searchPeople, retrievePeople } from "./search";
 
 function person(over: Record<string, unknown> = {}) {
   return {
@@ -27,6 +34,8 @@ describe("searchPeople", () => {
   beforeEach(() => {
     dbSearchPeople.mockReset();
     claimsForSlugs.mockReset();
+    peopleBySlugs.mockReset();
+    semanticRankSlugs.mockReset();
   });
 
   it("passes params through to the db with the bounded limit", () => {
@@ -68,5 +77,55 @@ describe("searchPeople", () => {
       },
     ]);
     expect(result[1].claims).toEqual([]);
+  });
+});
+
+describe("retrievePeople (hybrid)", () => {
+  beforeEach(() => {
+    dbSearchPeople.mockReset();
+    claimsForSlugs.mockReset();
+    peopleBySlugs.mockReset();
+    semanticRankSlugs.mockReset();
+    claimsForSlugs.mockReturnValue([]);
+  });
+
+  it("leads with keyword rows when structured filters are present, semantic supplements", async () => {
+    dbSearchPeople.mockReturnValue([person({ name_slug: "kw-1" })]);
+    semanticRankSlugs.mockResolvedValue(["sem-1"]);
+    peopleBySlugs.mockReturnValue([person({ name_slug: "sem-1" })]);
+
+    const result = await retrievePeople({ sector: "Investment Banking" }, "any");
+
+    expect(result.map((r) => r.name_slug)).toEqual(["kw-1", "sem-1"]);
+  });
+
+  it("leads with semantic rows for a pure natural-language query (no filters)", async () => {
+    dbSearchPeople.mockReturnValue([person({ name_slug: "kw-1" })]);
+    semanticRankSlugs.mockResolvedValue(["sem-1"]);
+    peopleBySlugs.mockReturnValue([person({ name_slug: "sem-1" })]);
+
+    const result = await retrievePeople({}, "who can advise on climate tech");
+
+    expect(result.map((r) => r.name_slug)).toEqual(["sem-1", "kw-1"]);
+  });
+
+  it("dedupes a person matched by both paths", async () => {
+    dbSearchPeople.mockReturnValue([person({ name_slug: "dup" })]);
+    semanticRankSlugs.mockResolvedValue(["dup"]);
+    peopleBySlugs.mockReturnValue([person({ name_slug: "dup" })]);
+
+    const result = await retrievePeople({}, "q");
+
+    expect(result.map((r) => r.name_slug)).toEqual(["dup"]);
+  });
+
+  it("falls back to keyword rows when semantic returns nothing", async () => {
+    dbSearchPeople.mockReturnValue([person({ name_slug: "kw-1" })]);
+    semanticRankSlugs.mockResolvedValue([]);
+
+    const result = await retrievePeople({}, "q");
+
+    expect(result.map((r) => r.name_slug)).toEqual(["kw-1"]);
+    expect(peopleBySlugs).not.toHaveBeenCalled();
   });
 });

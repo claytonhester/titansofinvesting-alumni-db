@@ -450,6 +450,52 @@ export function claimsForSlugs(slugs: string[]): SlugClaim[] {
     .all(...clean) as SlugClaim[];
 }
 
+// Fetch specific people by slug (semantic-search hits arrive as ranked slugs).
+// Preserves the caller's slug order so semantic ranking survives the round-trip.
+export function peopleBySlugs(slugs: string[]): Person[] {
+  const clean = slugs.filter((s) => typeof s === "string" && s.length > 0);
+  if (clean.length === 0) return [];
+  const placeholders = clean.map(() => "?").join(", ");
+  const rows = db()
+    .prepare(`SELECT ${COLUMNS} FROM people WHERE name_slug IN (${placeholders})`)
+    .all(...clean) as Person[];
+  const order = new Map(clean.map((s, i) => [s, i]));
+  return rows.sort(
+    (a, b) => (order.get(a.name_slug) ?? 0) - (order.get(b.name_slug) ?? 0)
+  );
+}
+
+export interface PersonVector {
+  name_slug: string;
+  vec: Float32Array;
+}
+
+// Load every person's semantic vector (Float32 BLOB) joined to its slug. Returns
+// [] when the vectors haven't been built yet (person_vectors absent) so semantic
+// retrieval degrades to keyword/facet search rather than throwing.
+export function loadPersonVectors(): PersonVector[] {
+  const hasTable = db()
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='person_vectors'"
+    )
+    .get();
+  if (!hasTable) return [];
+  const rows = db()
+    .prepare(
+      `SELECT p.name_slug AS name_slug, v.vec AS vec
+         FROM person_vectors v JOIN people p ON p.id = v.person_id`
+    )
+    .all() as { name_slug: string; vec: Buffer }[];
+  return rows.map((r) => ({
+    name_slug: r.name_slug,
+    vec: new Float32Array(
+      r.vec.buffer,
+      r.vec.byteOffset,
+      Math.floor(r.vec.byteLength / 4)
+    ),
+  }));
+}
+
 export function sectorBreakdown(): SectorBreakdown[] {
   const placeholders = FIRM_EXCLUDE.map(() => "?").join(", ");
   const rows = db()
