@@ -7,6 +7,7 @@ import {
   type NewsCategory,
   type NewsItem,
 } from "@/lib/news-types";
+import { byEditorialRank } from "@/lib/news-rank";
 
 type Filter = "All" | NewsCategory;
 
@@ -104,13 +105,14 @@ export default function NewsFeed({ items }: NewsFeedProps) {
     return map;
   }, [items]);
 
-  const sorted = useMemo(() => [...items].sort(byRecency), [items]);
+  // "All" leads with editorial rank (Recognition first, blended with importance);
+  // a specific-category view keeps recency order (newest in that category first).
   const visible = useMemo(
     () =>
       filter === "All"
-        ? sorted
-        : sorted.filter((item) => item.category === filter),
-    [sorted, filter],
+        ? [...items].sort(byEditorialRank)
+        : items.filter((item) => item.category === filter).sort(byRecency),
+    [items, filter],
   );
 
   if (items.length === 0) {
