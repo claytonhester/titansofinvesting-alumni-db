@@ -24,6 +24,7 @@ Output ONLY a JSON object with these optional keys (omit a key when not applicab
   "titanClass": <number>,      // a Titans class number if mentioned
   "companyKeyword": <string>,  // a specific firm/employer keyword if named
   "sector": <one of the allowed sectors below>,
+  "seniority": <string>,       // a seniority level if asked: "partner", "vp", "director", "senior"
   "intent": <short phrase describing what the visitor wants>
 }
 
@@ -65,6 +66,9 @@ export function coerceParams(obj: Record<string, unknown>): SearchParams {
     params.companyKeyword = obj.companyKeyword.trim();
   }
   if (typeof obj.intent === "string" && obj.intent.trim()) params.intent = obj.intent.trim();
+  if (typeof obj.seniority === "string" && obj.seniority.trim()) {
+    params.seniority = obj.seniority.trim();
+  }
   const cls = typeof obj.titanClass === "number" ? obj.titanClass : Number(obj.titanClass);
   if (Number.isFinite(cls) && cls > 0) params.titanClass = Math.floor(cls);
   if (typeof obj.sector === "string" && SECTOR_NAMES.includes(obj.sector)) {

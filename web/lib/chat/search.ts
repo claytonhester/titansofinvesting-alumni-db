@@ -13,6 +13,7 @@ export interface SearchParams {
   titanClass?: number;
   companyKeyword?: string;
   sector?: string;
+  seniority?: string;
   intent?: string;
 }
 
@@ -38,6 +39,7 @@ export function searchPeople(params: SearchParams): RetrievedPerson[] {
     titanClass: params.titanClass,
     companyKeyword: params.companyKeyword,
     sector: params.sector,
+    seniority: params.seniority,
     limit: RESULT_LIMIT,
   });
 
