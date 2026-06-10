@@ -29,4 +29,11 @@ run_cohort 1 "Texas A&M" 350 \
   && run_cohort 2 "University of Texas" 200
 
 echo "Firecrawl after: $(fc)"
+
+# Always finalize — even if PDL quota stopped the run early, the people who DID
+# enrich still need the sector Haiku upgrade, the --llm snapshot, embeddings, and
+# the web sync. finalize_pass.sh is idempotent.
+echo "----- finalizing (reclassify -> phase3 --llm -> embed -> sync-db) -----"
+./finalize_pass.sh
+
 echo "===== DONE $(date) ====="

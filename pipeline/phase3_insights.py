@@ -39,6 +39,7 @@ from insights_rollup import (
     _value_counts,
     build_snapshot,
     landing_firms,
+    order_titles_by_seniority,
     with_llm_narrative,
 )
 from insights_store import (
@@ -76,7 +77,12 @@ def _apply_llm_overlay(
     # Associate Attorney / Associate – Private Equity; the long product-suffixed
     # ones) fold into one row, then take the top N for the display card.
     title_cls = canonicalize_titles(anthropic, title_counts)
-    new_titles = title_cls.titles[:DEFAULT_TOP_TITLES] or snap.current_titles
+    # Keep the top-N-by-count selection (the populous, meaningful roles), then
+    # order that set by seniority for display — most senior first.
+    new_titles = (
+        order_titles_by_seniority(title_cls.titles[:DEFAULT_TOP_TITLES])
+        or snap.current_titles
+    )
 
     narrative = write_narrative(
         anthropic,
