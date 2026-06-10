@@ -7,9 +7,10 @@ import type {
   CurrentTitle,
   SignatureStat,
 } from "@/lib/insights";
-import type { FirmCluster, SectorMember } from "@/lib/db";
+import type { FirmCluster, SectorMember, KpiMember } from "@/lib/db";
 import { parseBoldSegments } from "@/lib/markdown-bold";
 import SectorModal from "./sector-modal";
+import KpiModal from "./kpi-modal";
 
 interface FirmBar {
   company: string;
@@ -43,6 +44,7 @@ interface InsightsViewsProps {
   measuredSectors: SectorBar[];
   firstJobMembers: SectorMember[];
   landingMembers: SectorMember[];
+  kpiMembers: Record<string, KpiMember[]>;
 }
 
 function max(values: number[]): number {
@@ -176,6 +178,8 @@ export default function InsightsViews(props: InsightsViewsProps) {
   const [sectorModal, setSectorModal] = useState<"first" | "landing" | null>(
     null,
   );
+  // Which KPI scorecard tile's people-modal is open (by metric key), or null.
+  const [kpiModal, setKpiModal] = useState<string | null>(null);
 
   const hasNarrative = props.hasOutcomeData && props.narrative.trim().length > 0;
   const hasScorecard = props.signatureStats.length > 0;
@@ -207,21 +211,41 @@ export default function InsightsViews(props: InsightsViewsProps) {
 
         {hasScorecard ? (
           <div className="scorecard-bento col-12">
-            {props.signatureStats.map((s) => (
-              <div className="score-tile" key={s.label}>
-                <div className="score-value">{s.value}</div>
-                <div className="score-label">{s.label}</div>
-                <div className="score-detail">{s.detail}</div>
-                {s.pct > 0 && (
-                  <div className="score-bar-track">
-                    <div
-                      className="score-bar-fill"
-                      style={{ width: `${Math.min(s.pct, 100)}%` }}
-                    />
-                  </div>
-                )}
-              </div>
-            ))}
+            {props.signatureStats.map((s) => {
+              const people = s.key ? props.kpiMembers[s.key] ?? [] : [];
+              const clickable = people.length > 0;
+              return (
+                <div
+                  className={`score-tile${clickable ? " is-clickable" : ""}`}
+                  key={s.label}
+                  role={clickable ? "button" : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onClick={clickable ? () => setKpiModal(s.key) : undefined}
+                  onKeyDown={
+                    clickable
+                      ? (e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setKpiModal(s.key);
+                          }
+                        }
+                      : undefined
+                  }
+                >
+                  <div className="score-value">{s.value}</div>
+                  <div className="score-label">{s.label}</div>
+                  <div className="score-detail">{s.detail}</div>
+                  {s.pct > 0 && (
+                    <div className="score-bar-track">
+                      <div
+                        className="score-bar-fill"
+                        style={{ width: `${Math.min(s.pct, 100)}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         ) : (
           <div className="panel col-12">
@@ -430,6 +454,14 @@ export default function InsightsViews(props: InsightsViewsProps) {
           subtitle="Current employer"
           members={props.landingMembers}
           onClose={() => setSectorModal(null)}
+        />
+      )}
+      {kpiModal && (
+        <KpiModal
+          stats={props.signatureStats}
+          members={props.kpiMembers}
+          initialKey={kpiModal}
+          onClose={() => setKpiModal(null)}
         />
       )}
     </section>

@@ -30,6 +30,7 @@ interface SearchParams {
   q?: string;
   school?: string;
   class?: string;
+  enriched?: string;
 }
 
 export default async function Home({
@@ -42,6 +43,8 @@ export default async function Home({
   const school = sp.school ?? "";
   const classRaw = sp.class ?? "";
   const titanClass = classRaw === "" ? undefined : Number(classRaw);
+  // Default ON: only people we have data on. The user turns it off with enriched=0.
+  const enrichedOnly = sp.enriched !== "0";
 
   const stats = directoryStats();
   const schools = listSchools();
@@ -54,6 +57,7 @@ export default async function Home({
     q: q || undefined,
     school: school || undefined,
     titanClass: Number.isNaN(titanClass) ? undefined : titanClass,
+    enrichedOnly,
   });
 
   const filtered = Boolean(q || school || classRaw);
@@ -107,6 +111,7 @@ export default async function Home({
                 measuredSectors={insights.measuredSectors}
                 firstJobMembers={insights.firstJobMembers}
                 landingMembers={insights.landingMembers}
+                kpiMembers={insights.kpiMembers}
               />
             ),
             build: (
@@ -166,7 +171,7 @@ export default async function Home({
           <Filters
             schools={schools}
             classes={classes}
-            current={{ q, school, titanClass: classRaw }}
+            current={{ q, school, titanClass: classRaw, enrichedOnly }}
           />
 
           {people.length === 0 ? (

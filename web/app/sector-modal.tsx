@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { SectorMember } from "@/lib/db";
 
@@ -44,6 +44,17 @@ export default function SectorModal({
 }: SectorModalProps) {
   const groups = useMemo(() => groupBySector(members), [members]);
   const total = members.length;
+
+  // Groups start collapsed — the modal opens as a scannable list of clusters with
+  // counts; click a header to expand that cluster's people.
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (sector: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(sector)) next.delete(sector);
+      else next.add(sector);
+      return next;
+    });
 
   // Escape to close; lock the page scroll while the modal is open.
   useEffect(() => {
@@ -91,32 +102,50 @@ export default function SectorModal({
         </div>
 
         <div className="sector-modal-body">
-          {groups.map((g) => (
-            <section className="sector-group" key={g.sector}>
-              <div className="sector-group-head">
-                <span className="sector-group-name">{g.sector}</span>
-                <span className="sector-group-count">{g.members.length}</span>
-              </div>
-              <div className="sector-group-list">
-                {g.members.map((m) => (
-                  <Link
-                    href={`/person/${m.slug}`}
-                    className="sector-member"
-                    key={`${m.slug}-${m.name}`}
-                  >
-                    <span className="sector-member-name">{m.name}</span>
-                    <span className="sector-member-meta">
-                      {m.employer || "—"}
-                      {m.industry ? ` · ${m.industry}` : ""}
+          {groups.map((g) => {
+            const isOpen = open.has(g.sector);
+            return (
+              <section className="sector-group" key={g.sector}>
+                <button
+                  type="button"
+                  className="sector-group-head"
+                  aria-expanded={isOpen}
+                  onClick={() => toggle(g.sector)}
+                >
+                  <span className="sector-group-name">
+                    <span
+                      className={`sector-group-chevron${isOpen ? " is-open" : ""}`}
+                      aria-hidden="true"
+                    >
+                      ›
                     </span>
-                    <span className="sector-member-tag">
-                      {m.school} · Titans {m.titanClass}
-                    </span>
-                  </Link>
-                ))}
-              </div>
-            </section>
-          ))}
+                    {g.sector}
+                  </span>
+                  <span className="sector-group-count">{g.members.length}</span>
+                </button>
+                {isOpen && (
+                  <div className="sector-group-list">
+                    {g.members.map((m) => (
+                      <Link
+                        href={`/person/${m.slug}`}
+                        className="sector-member"
+                        key={`${m.slug}-${m.name}`}
+                      >
+                        <span className="sector-member-name">{m.name}</span>
+                        <span className="sector-member-meta">
+                          {m.employer || "—"}
+                          {m.industry ? ` · ${m.industry}` : ""}
+                        </span>
+                        <span className="sector-member-tag">
+                          {m.school} · Titans {m.titanClass}
+                        </span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </section>
+            );
+          })}
         </div>
       </div>
     </div>

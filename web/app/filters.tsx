@@ -7,7 +7,7 @@ import type { ClassOption } from "@/lib/db";
 interface Props {
   schools: string[];
   classes: ClassOption[];
-  current: { q: string; school: string; titanClass: string };
+  current: { q: string; school: string; titanClass: string; enrichedOnly: boolean };
 }
 
 export default function Filters({ schools, classes, current }: Props) {
@@ -20,9 +20,13 @@ export default function Filters({ schools, classes, current }: Props) {
       const q = (data.get("q") as string)?.trim();
       const school = data.get("school") as string;
       const titanClass = data.get("titanClass") as string;
+      // Checkbox is present in FormData only when checked. Enriched-only is the
+      // default, so we only carry a param when the user turns it OFF.
+      const enrichedOnly = data.get("enrichedOnly") !== null;
       if (q) params.set("q", q);
       if (school) params.set("school", school);
       if (titanClass) params.set("class", titanClass);
+      if (!enrichedOnly) params.set("enriched", "0");
       const qs = params.toString();
       router.push(qs ? `/?${qs}` : "/");
     },
@@ -72,6 +76,15 @@ export default function Filters({ schools, classes, current }: Props) {
       >
         Reset
       </button>
+      <label className="filter-toggle" title="Hide alumni we don't have data on yet">
+        <input
+          type="checkbox"
+          name="enrichedOnly"
+          defaultChecked={current.enrichedOnly}
+          onChange={(e) => submit(e.currentTarget.form as HTMLFormElement)}
+        />
+        <span>Only profiles with data</span>
+      </label>
     </form>
   );
 }

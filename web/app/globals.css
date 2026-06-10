@@ -432,7 +432,6 @@ a:hover {
   font-size: 18px;
   line-height: 1.6;
   color: var(--ink);
-  max-width: 70ch;
 }
 .insight-narrative strong {
   font-weight: 650;
@@ -584,6 +583,221 @@ a:hover {
   padding: 20px;
   box-shadow: var(--shadow-sm);
 }
+.score-tile.is-clickable {
+  cursor: pointer;
+  transition: box-shadow 0.16s ease, border-color 0.16s ease;
+}
+.score-tile.is-clickable:hover {
+  box-shadow: var(--shadow-hover);
+  border-color: var(--line-strong);
+}
+.score-tile.is-clickable:focus-visible {
+  outline: 2px solid var(--maroon);
+  outline-offset: 2px;
+}
+.kpi-modal-empty {
+  padding: 24px 6px;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+/* --- KPI insight modal (tabbed, with graphics) --- */
+/* Higher specificity than `.sector-modal` (defined later) so the wider KPI
+   modal width wins regardless of source order. */
+.sector-modal.kpi-modal {
+  width: min(920px, 100%);
+}
+/* Tabs + close share one row. On a narrow screen the tab strip scrolls
+   horizontally (some tabs hidden) while the close button stays pinned right. */
+.kpi-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.kpi-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.kpi-tabs::-webkit-scrollbar {
+  display: none;
+}
+.kpi-close {
+  flex: 0 0 auto;
+}
+.kpi-tab {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+  white-space: nowrap;
+}
+.kpi-tab:hover {
+  background: var(--maroon-tint);
+  color: var(--ink);
+}
+.kpi-tab.is-active {
+  background: var(--maroon);
+  color: #fff;
+}
+.kpi-tab.is-active:hover {
+  background: var(--maroon-700);
+}
+
+.kpi-pane-top {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 22px 6px 20px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 6px;
+}
+.kpi-hero {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kpi-hero-value {
+  font-size: 46px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--maroon-deep);
+  font-variant-numeric: tabular-nums;
+}
+.kpi-hero-label {
+  margin-top: 10px;
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.kpi-hero-detail {
+  margin: 4px 0 0;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  max-width: 36ch;
+}
+.kpi-hero-count {
+  margin: 12px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--maroon);
+}
+
+/* graphic: ring + histogram share a fixed-width column on the right */
+.kpi-graphic {
+  flex: 0 0 auto;
+  width: 168px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.kpi-graphic-cap {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  text-align: center;
+  line-height: 1.4;
+}
+.kpi-ring {
+  width: 132px;
+  height: 132px;
+}
+.kpi-ring-track {
+  fill: none;
+  stroke: var(--maroon-tint-strong);
+  stroke-width: 13;
+}
+.kpi-ring-fill {
+  fill: none;
+  stroke: var(--maroon);
+  stroke-width: 13;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.4s ease;
+}
+.kpi-ring-pct {
+  font-size: 30px;
+  font-weight: 700;
+  fill: var(--maroon-deep);
+  font-variant-numeric: tabular-nums;
+}
+
+.kpi-hist {
+  width: 230px;
+}
+.kpi-hist-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+  height: 120px;
+}
+.kpi-hist-col {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+}
+.kpi-hist-track {
+  flex: 1 1 auto;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.kpi-hist-bar {
+  width: 100%;
+  min-height: 3px;
+  background: linear-gradient(180deg, var(--maroon), var(--maroon-deep));
+  border-radius: 5px 5px 0 0;
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+.kpi-hist-n {
+  position: absolute;
+  top: -16px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.kpi-hist-label {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.kpi-people {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 560px) {
+  .kpi-pane-top {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 18px;
+  }
+  .kpi-graphic {
+    align-self: center;
+  }
+}
 .score-value {
   font-size: 34px;
   font-weight: 700;
@@ -675,6 +889,25 @@ a:hover {
   border-color: var(--line-strong);
 }
 .toolbar .reset:hover { background: var(--maroon-tint); }
+
+/* "Only profiles with data" toggle — the directory's default-on enriched filter. */
+.filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.filter-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--maroon);
+  cursor: pointer;
+}
+.filter-toggle:hover { color: var(--ink); }
 
 .result-count {
   color: var(--ink-soft);
@@ -1692,24 +1925,48 @@ a.xp-title:hover { text-decoration: underline; text-decoration-color: currentCol
   padding: 8px 24px 24px;
 }
 .sector-group {
-  padding-top: 18px;
+  padding-top: 8px;
 }
 .sector-group-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding-bottom: 8px;
-  margin-bottom: 6px;
+  width: 100%;
+  border: none;
   border-bottom: 1px solid var(--line);
-  position: sticky;
-  top: 0;
   background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 11px 6px 9px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+.sector-group-head:hover {
+  background: var(--maroon-tint);
+}
+.sector-group-head:focus-visible {
+  outline: 2px solid var(--maroon);
+  outline-offset: -2px;
 }
 .sector-group-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13.5px;
   font-weight: 650;
   color: var(--maroon-deep);
+}
+.sector-group-chevron {
+  display: inline-block;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--maroon-300);
+  transition: transform 0.15s ease;
+}
+.sector-group-chevron.is-open {
+  transform: rotate(90deg);
 }
 .sector-group-count {
   font-size: 12px;
@@ -1735,6 +1992,13 @@ a.xp-title:hover { text-decoration: underline; text-decoration-color: currentCol
 }
 .sector-member:hover {
   background: var(--maroon-tint);
+  text-decoration: none;
+}
+/* Never underline the row text on hover — the tint is the only affordance. */
+.sector-member:hover .sector-member-name,
+.sector-member:hover .sector-member-meta,
+.sector-member:hover .sector-member-tag {
+  text-decoration: none;
 }
 .sector-member-name {
   grid-area: name;

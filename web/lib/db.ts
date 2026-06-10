@@ -47,6 +47,10 @@ export interface DirectoryFilters {
   q?: string;
   school?: string;
   titanClass?: number;
+  // When true, restrict to people we actually have data on (≥1 verified claim) —
+  // the same "enriched" definition the Overview counts. Default behavior is set
+  // by the caller (the directory defaults it ON).
+  enrichedOnly?: boolean;
 }
 
 const COLUMNS =
@@ -67,6 +71,9 @@ export function listPeople(filters: DirectoryFilters): Person[] {
   if (filters.titanClass !== undefined) {
     where.push("titan_class = :titanClass");
     params.titanClass = filters.titanClass;
+  }
+  if (filters.enrichedOnly) {
+    where.push("id IN (SELECT DISTINCT person_id FROM claims)");
   }
 
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
@@ -786,6 +793,140 @@ export function landingSectorMembers(): SectorMember[] {
   }
 }
 
+// --- KPI scorecard drill-downs ------------------------------------------
+
+export interface KpiMember {
+  name: string;
+  slug: string;
+  school: string;
+  titanClass: number;
+  // KPI-specific context line (role · firm, "N yrs to MD", current city, …).
+  detail: string;
+  // Raw numeric for distribution KPIs (years_to_md, tenure); null otherwise — so
+  // the modal can draw a histogram instead of just a ring.
+  metric: number | null;
+}
+
+// The scorecard keys the web knows how to drill into. Mirrors the `key` set in
+// pipeline kpi_rollup.py. A tile whose key isn't here is simply not clickable.
+export const KPI_KEYS = [
+  "buy_side",
+  "reached_md",
+  "founder_partner",
+  "still_first_firm",
+  "grad_degree",
+  "years_to_md",
+  "tenure",
+  "left_texas",
+] as const;
+export type KpiKey = (typeof KPI_KEYS)[number];
+
+// One current-* value from claims (employer / title / location), or '' if absent.
+function claimSub(claimType: string): string {
+  return `COALESCE((SELECT c.value FROM claims c WHERE c.person_id = pi.person_id AND c.claim_type = '${claimType}' LIMIT 1), '')`;
+}
+
+// WHERE predicate + ORDER BY per KPI. Predicates read the per-person flags/metrics
+// the pipeline already classified; ordering is chosen to make each list READ as an
+// insight (fastest climbers first, longest tenure first, else alphabetical).
+const KPI_QUERY: Record<KpiKey, { where: string; orderBy: string }> = {
+  buy_side: { where: "pi.on_buy_side = 1", orderBy: "p.full_name" },
+  reached_md: { where: "pi.reached_md = 1", orderBy: "p.full_name" },
+  founder_partner: { where: "pi.founder_partner = 1", orderBy: "p.full_name" },
+  still_first_firm: { where: "pi.still_first_firm = 1", orderBy: "p.full_name" },
+  grad_degree: { where: "pi.has_advanced_degree = 1", orderBy: "p.full_name" },
+  years_to_md: { where: "pi.years_to_md IS NOT NULL", orderBy: "pi.years_to_md ASC, p.full_name" },
+  tenure: { where: "pi.tenure_years IS NOT NULL", orderBy: "pi.tenure_years DESC, p.full_name" },
+  left_texas: { where: "pi.left_texas = 1", orderBy: "p.full_name" },
+};
+
+interface KpiRow {
+  name: string;
+  slug: string;
+  school: string;
+  titanClass: number;
+  employer: string;
+  title: string;
+  location: string;
+  firstEmployer: string;
+  yearsToMd: number | null;
+  tenureYears: number | null;
+}
+
+function joinRoleFirm(title: string, firm: string): string {
+  if (title && firm) return `${title} · ${firm}`;
+  return title || firm || "—";
+}
+
+// Compose the KPI-specific context line from the row. Kept in JS (not SQL) so each
+// metric can present the most relevant fact without a thicket of CASE expressions.
+function kpiDetail(key: KpiKey, r: KpiRow): string {
+  switch (key) {
+    case "buy_side":
+    case "reached_md":
+    case "grad_degree":
+      return joinRoleFirm(r.title, r.employer);
+    case "founder_partner":
+      return joinRoleFirm(r.title, r.employer);
+    case "still_first_firm":
+      return joinRoleFirm(r.title, r.firstEmployer || r.employer);
+    case "years_to_md":
+      return r.yearsToMd != null
+        ? `${r.yearsToMd} yrs to MD${r.employer ? ` · ${r.employer}` : ""}`
+        : joinRoleFirm(r.title, r.employer);
+    case "tenure":
+      return r.tenureYears != null
+        ? `${r.tenureYears} ${r.tenureYears === 1 ? "yr" : "yrs"}${r.employer ? ` · ${r.employer}` : ""}`
+        : joinRoleFirm(r.title, r.employer);
+    case "left_texas":
+      return r.location || r.employer || "—";
+  }
+}
+
+// People behind one scorecard KPI, with a metric-specific context line. Returns []
+// for an unknown key or before the pipeline has classified anyone.
+export function kpiMembers(key: string): KpiMember[] {
+  if (!(KPI_KEYS as readonly string[]).includes(key)) return [];
+  const { where, orderBy } = KPI_QUERY[key as KpiKey];
+  let rows: KpiRow[];
+  try {
+    rows = db()
+      .prepare(
+        `SELECT
+           p.full_name   AS name,
+           p.name_slug   AS slug,
+           p.school      AS school,
+           p.titan_class AS titanClass,
+           ${claimSub("current_employer")} AS employer,
+           ${claimSub("current_title")}    AS title,
+           ${claimSub("location")}         AS location,
+           COALESCE(pi.first_employer, '') AS firstEmployer,
+           pi.years_to_md  AS yearsToMd,
+           pi.tenure_years AS tenureYears
+         FROM person_insights pi
+         JOIN people p ON p.id = pi.person_id
+         WHERE ${where}
+         ORDER BY ${orderBy}`
+      )
+      .all() as KpiRow[];
+  } catch {
+    return [];
+  }
+  return rows.map((r) => ({
+    name: r.name,
+    slug: r.slug,
+    school: r.school,
+    titanClass: r.titanClass,
+    detail: kpiDetail(key as KpiKey, r),
+    metric:
+      key === "years_to_md"
+        ? r.yearsToMd
+        : key === "tenure"
+          ? r.tenureYears
+          : null,
+  }));
+}
+
 // Per-person rows behind the FIRST-JOB sector card: the verified first employer
 // (first jobs have no industry on record, so industry is left blank).
 export function firstJobSectorMembers(): SectorMember[] {
@@ -1018,7 +1159,7 @@ export interface InsightsSnapshot {
   landing_firms: { company: string; count: number }[];
   current_titles: { title: string; count: number }[];
   seniority: { tier: string; count: number }[];
-  signature_stats: { label: string; value: string; detail: string; pct: number }[];
+  signature_stats: { label: string; value: string; detail: string; pct: number; key: string }[];
   landing_sectors: { sector: string; count: number }[];
   founders_partners: number;
 }
@@ -1053,7 +1194,7 @@ export function latestInsightsSnapshot(): InsightsSnapshot | null {
     landing_firms?: { company: string; count: number }[];
     current_titles?: { title: string; count: number }[];
     seniority?: { tier: string; count: number }[];
-    signature_stats?: { label: string; value: string; detail: string; pct: number }[];
+    signature_stats?: { label: string; value: string; detail: string; pct: number; key?: string }[];
     landing_sectors?: { sector: string; count: number }[];
     founders_partners?: number;
   };
@@ -1068,7 +1209,10 @@ export function latestInsightsSnapshot(): InsightsSnapshot | null {
     landing_firms: payload.landing_firms ?? [],
     current_titles: payload.current_titles ?? [],
     seniority: payload.seniority ?? [],
-    signature_stats: payload.signature_stats ?? [],
+    signature_stats: (payload.signature_stats ?? []).map((s) => ({
+      ...s,
+      key: s.key ?? "",
+    })),
     landing_sectors: payload.landing_sectors ?? [],
     founders_partners: payload.founders_partners ?? 0,
   };

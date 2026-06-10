@@ -138,24 +138,28 @@ def kpi_signature_stats(
             value=f"{_pct(buy, classified)}%",
             detail=buy_detail,
             pct=_pct(buy, classified),
+            key="buy_side",
         ),
         SignatureStat(
             label="Reached MD or above",
             value=f"{md_pct}%",
             detail=f"of those already there or {md_years}+ years out",
             pct=md_pct,
+            key="reached_md",
         ),
         SignatureStat(
             label="Founders & partners",
             value=str(founders),
             detail="running their own fund or holding a partner seat",
             pct=_pct(founders, classified),
+            key="founder_partner",
         ),
         SignatureStat(
             label="Still at their first firm",
             value=f"{_pct(still, classified)}%",
             detail="stayed and climbed where they started",
             pct=_pct(still, classified),
+            key="still_first_firm",
         ),
     ) + _secondary_stats(insights)
 
@@ -172,6 +176,7 @@ def _secondary_stats(insights: Sequence[PersonInsight]) -> tuple[SignatureStat, 
         value=f"{deg}%",
         detail="went back for an MBA, JD, or other advanced degree",
         pct=deg,
+        key="grad_degree",
     ))
 
     ytm = avg_years_to_md(insights)
@@ -181,6 +186,7 @@ def _secondary_stats(insights: Sequence[PersonInsight]) -> tuple[SignatureStat, 
             value=f"{ytm:.0f} yrs",
             detail="from graduation to Managing Director or above",
             pct=0,
+            key="years_to_md",
         ))
 
     ten = avg_tenure(insights)
@@ -190,6 +196,7 @@ def _secondary_stats(insights: Sequence[PersonInsight]) -> tuple[SignatureStat, 
             value=f"{ten:.0f} yrs",
             detail="years in their current role",
             pct=0,
+            key="tenure",
         ))
 
     left_pct, known = left_texas_rate(insights)
@@ -199,6 +206,7 @@ def _secondary_stats(insights: Sequence[PersonInsight]) -> tuple[SignatureStat, 
             value=f"{left_pct}%",
             detail="live outside Texas now",
             pct=left_pct,
+            key="left_texas",
         ))
 
     return tuple(out)
