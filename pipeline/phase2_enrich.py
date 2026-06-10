@@ -35,7 +35,7 @@ from firecrawl import Firecrawl
 from config import DB_PATH, require_key
 from cost_log import PDL_USD_PER_MATCH, append_entry, build_entry, remaining_credits
 from mention_discovery import discover_mentions
-from news_enrich import NewsEnrichResult, extract_news_mentions
+from news_enrich import extract_news_mentions
 from discovery import DiscoveryResult, NewsDiscoveryResult, Source, _domain, discover, discover_news
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
 from normalize import digest_claims
@@ -46,7 +46,7 @@ from linkedin_firecrawl import (
     agent_batch_budget,
     fetch_linkedin,
 )
-from pdl_enrich import PdlAttributes, enrich_pdl
+from pdl_enrich import PdlAttributes, PdlUnavailable, enrich_pdl
 from pdl_verify import verify_pdl_claims
 from reconcile import reconcile_claims
 from career_analysis import (
@@ -59,8 +59,10 @@ from grad_year import derive_grad_year, grad_year_from_class
 from kpi_classify import MODEL_METHOD as KPI_METHOD, classify_kpis
 from profile_metrics import has_advanced_degree, left_texas
 from sector_classify import classify_sector
-from article_context import make_firecrawl_fetcher
 from company_enrich import _bare_domain as _company_domain
+from deep_gate import FirecrawlBudget, is_high_signal
+from http_fetch import fetch_article as fetch_article_jina
+from jina_discovery import discover_via_jina
 from news_curate import curate_news
 from news_store import init_news_schema, replace_curated_news
 from sonar_news import discover_press_sonar
@@ -269,6 +271,7 @@ def enrich_person(
     perplexity_key: str | None = None,
     *,
     li_budget: LinkedInBudget | None = None,
+    fc_budget: FirecrawlBudget | None = None,
 ) -> _PersonUsage:
     """Run the full pipeline for one person and persist every stage. Records
     batch_status per phase so a crash mid-batch resumes cleanly. Returns the
@@ -277,19 +280,18 @@ def enrich_person(
     # LinkedIn gate still works; run() passes a shared budget across the batch.
     if li_budget is None:
         li_budget = LinkedInBudget(agent_batch_budget(1))
-    # Firecrawl is the deepest career source but it is billed and can run dry.
-    # Treat a 0-credit state as a graceful skip, NOT a fatal abort: PDL +
-    # Perplexity remain a working spine, so the batch keeps producing profiles
-    # (just without scraped career pages) instead of dying on person one.
-    try:
-        disc = discover(firecrawl, person.full_name, person.company, person.city)
-    except PaymentRequiredError:
-        print("  Firecrawl: no credits — career discovery skipped "
-              "(using PDL + Perplexity only)")
-        disc = DiscoveryResult(
-            full_name=person.full_name, sources=(), queries=(), credits_spent=0
-        )
-    replace_sources(conn, person.id, _source_rows(disc))
+    if fc_budget is None:
+        fc_budget = FirecrawlBudget(0)  # standalone call: no deep-path budget by default
+    # Baseline discovery is Firecrawl-FREE: Perplexity finds candidate career URLs,
+    # the free Jina reader fetches them, and we get the SAME Source objects the
+    # identity gate + structuring consume. Firecrawl is reserved for the high-signal
+    # deep top-up below, so a full run no longer burns ~15 credits/person here — and
+    # baseline keeps working even at zero Firecrawl credits.
+    disc = discover_via_jina(
+        http, perplexity_key, person.full_name, person.company, person.city
+    )
+    base_source_rows = _source_rows(disc)
+    replace_sources(conn, person.id, base_source_rows)
     anchors = _anchors(person)
 
     # Deterministic pre-filter first: slam-dunk multi-anchor matches are accepted
@@ -297,10 +299,10 @@ def enrich_person(
     pre = prefilter(anchors, disc.sources)
     identity = resolve_identity(anthropic, anchors, pre.ambiguous)
     verdicts = pre.decided + identity.verdicts
-    candidate_rows = _candidate_rows(pre.decided, "prefilter") + _candidate_rows(
+    base_candidate_rows = _candidate_rows(pre.decided, "prefilter") + _candidate_rows(
         identity.verdicts, "sonnet"
     )
-    replace_candidates(conn, person.id, candidate_rows)
+    replace_candidates(conn, person.id, base_candidate_rows)
     mark_phase(conn, person.id, PHASE_IDENTITY, "done")
 
     trusted: tuple[Source, ...] = accepted_sources(disc.sources, verdicts)
@@ -352,53 +354,129 @@ def enrich_person(
         pdl_dropped = n_before - len(kept_pdl)
         claim_rows.extend(kept_pdl)
 
-    # Firecrawl agent-mode LinkedIn — a CORE source, but GAP-FILLING, not blanket.
-    # Plain scrape is auth-walled out of LinkedIn; the agent reads the public
-    # profile. The agent is billed and variable (observed 45–324 credits/call) and
-    # the single biggest line item in a run, so it's triple-gated by LinkedInBudget:
-    #   1. profile must be thin (PDL already-rich profiles would just get a dup),
-    #   2. the person must have >=1 identity-verified source (firing the name-based
-    #      agent on someone with no web footprint almost always finds nothing), and
-    #   3. the batch must have agent budget left (hard cap; Firecrawl ignores the
-    #      per-call max_credits, so this pre-flight check is the real protection).
-    # When it does run, the reconciler merges it with PDL + scrape.
-    li_credits = 0
-    n_li = 0
-    # Derive grad_year and current_role_start_year for the year-gap heuristic.
-    # Use the class map (always available) for grad_year; prefer PDL's authoritative
-    # current_role_start_year over parsing claims (PDL is more reliable for this).
-    _li_grad_year = grad_year_from_class(person.school, person.titan_class)
-    _li_role_start = (
-        pdl.attributes.current_role_start_year
-        if pdl is not None
-        else _current_role_start_year_from_claims(claim_rows)
+    # === DEEP FIRECRAWL TOP-UP (high-signal only, under the run credit ceiling) ===
+    # Baseline ran on free Jina. Firecrawl's billed calls are reserved for people who
+    # warrant them: a confident PDL match, or real verified web presence. A thin,
+    # no-footprint alum stops at the free baseline — Firecrawl can't surface what
+    # isn't there, so we don't spend it there. Inside the gate, three Firecrawl uses:
+    #   1. richer career pages (search+scrape) -> identity -> a 2nd structuring pass
+    #      (the reconciler below merges its claims with the baseline ones),
+    #   2. the LinkedIn agent (its own gap-filling triple-gate; biggest line item),
+    #   3. the press/news pass.
+    pdl_matched = bool(pdl and pdl.matched)
+    deep = is_high_signal(
+        pdl_matched=pdl_matched,
+        trusted_count=len(trusted),
+        has_current_employer=bool(_verified_employer),
     )
-    decision = li_budget.decide(
-        claim_rows,
-        len(trusted),
-        grad_year=_li_grad_year,
-        current_role_start_year=_li_role_start,
-    )
-    if not decision.fire:
-        print(f"  Firecrawl LinkedIn: skipped ({decision.reason})")
+    li_credits = n_li = 0
+    career_credits = 0
+    fc_news_credits = n_fc_news = 0
+    fc_news_in = fc_news_out = 0
+    deep_sonnet_in = deep_sonnet_out = deep_struct_in = deep_struct_out = 0
+    if not deep:
+        print("  Deep Firecrawl: skipped (low signal — free baseline only)")
+    elif not fc_budget.decide().fire:
+        print(f"  Deep Firecrawl: skipped ({fc_budget.decide().reason})")
     else:
+        # 1. Richer career pages via Firecrawl, identity-gated and structured again.
         try:
-            li = fetch_linkedin(
-                firecrawl, person.full_name,
-                employer=_verified_employer or person.company, city=person.city,
-            )
-            li_credits = li.credits_used
-            li_budget.charge(li_credits)
-            n_li = len(li.claim_rows)
-            if li.claim_rows:
-                claim_rows.extend(li.claim_rows)
+            ddisc = discover(firecrawl, person.full_name, person.company, person.city)
         except PaymentRequiredError:
-            print("  Firecrawl LinkedIn: no credits — skipped")
+            ddisc = DiscoveryResult(
+                full_name=person.full_name, sources=(), queries=(), credits_spent=0
+            )
+        fc_budget.charge(ddisc.credits_spent)
+        career_credits = ddisc.credits_spent
+        # Only process URLs the free baseline did NOT already cover — Perplexity and
+        # Firecrawl often return the same page, and re-using it would (a) violate the
+        # person_sources (person_id, url) UNIQUE key on the union persist, and (b)
+        # waste a Sonnet identity call + Haiku structuring re-extracting the same text.
+        _base_urls = {s.url for s in disc.sources}
+        new_deep = tuple(s for s in ddisc.sources if s.url not in _base_urls)
+        if new_deep:
+            dpre = prefilter(anchors, new_deep)
+            dident = resolve_identity(anthropic, anchors, dpre.ambiguous)
+            dverdicts = dpre.decided + dident.verdicts
+            dtrusted = accepted_sources(new_deep, dverdicts)
+            dstruct = structure_profile(anthropic, person.full_name, dtrusted)
+            claim_rows.extend(_claim_rows(dstruct))
+            deep_sonnet_in, deep_sonnet_out = dident.input_tokens, dident.output_tokens
+            deep_struct_in, deep_struct_out = dstruct.input_tokens, dstruct.output_tokens
+            # Record deep provenance alongside the baseline (union of disjoint URLs).
+            deep_source_rows = [
+                SourceRow(url=s.url, domain=_domain(s.url), title=s.title, relevance=s.relevance)
+                for s in new_deep
+            ]
+            replace_sources(conn, person.id, base_source_rows + deep_source_rows)
+            replace_candidates(
+                conn, person.id,
+                base_candidate_rows
+                + _candidate_rows(dpre.decided, "prefilter")
+                + _candidate_rows(dident.verdicts, "sonnet"),
+            )
+
+        # 2. LinkedIn agent — gap-filling, billed, its own triple-gate (thin profile
+        #    + verified presence + agent budget). Charges BOTH its own ceiling and the
+        #    deep Firecrawl budget.
+        _li_grad_year = grad_year_from_class(person.school, person.titan_class)
+        _li_role_start = (
+            pdl.attributes.current_role_start_year
+            if pdl is not None
+            else _current_role_start_year_from_claims(claim_rows)
+        )
+        decision = li_budget.decide(
+            claim_rows, len(trusted),
+            grad_year=_li_grad_year, current_role_start_year=_li_role_start,
+        )
+        if not fc_budget.decide().fire:
+            # The deep Firecrawl ceiling (--max-credits) is a HARD cap on ALL deep
+            # Firecrawl, including the LinkedIn agent — the biggest spender. Without
+            # this check LinkedIn would be bounded only by li_budget and could
+            # overshoot the operator's --max-credits.
+            print("  Firecrawl LinkedIn: skipped (deep-path budget spent)")
+        elif not decision.fire:
+            print(f"  Firecrawl LinkedIn: skipped ({decision.reason})")
+        else:
+            try:
+                li = fetch_linkedin(
+                    firecrawl, person.full_name,
+                    employer=_verified_employer or person.company, city=person.city,
+                )
+                li_credits = li.credits_used
+                li_budget.charge(li_credits)
+                fc_budget.charge(li_credits)
+                n_li = len(li.claim_rows)
+                if li.claim_rows:
+                    claim_rows.extend(li.claim_rows)
+            except PaymentRequiredError:
+                print("  Firecrawl LinkedIn: no credits — skipped")
+
+        # 3. Firecrawl + Claude press/news pass (verified employer/title queries).
+        if fc_budget.decide().fire:
+            try:
+                news_disc = discover_news(
+                    firecrawl, person.full_name, person.company,
+                    verified_employer=_verified_employer,
+                    verified_title=_verified_title,
+                )
+            except PaymentRequiredError:
+                news_disc = NewsDiscoveryResult(sources=(), credits_spent=0)
+            fc_budget.charge(news_disc.credits_spent)
+            fc_news_credits = news_disc.credits_spent
+            fc_news = extract_news_mentions(
+                anthropic, person.full_name,
+                _verified_employer or person.company, news_disc,
+            )
+            if fc_news.claim_rows:
+                claim_rows.extend(fc_news.claim_rows)
+            fc_news_in, fc_news_out = fc_news.input_tokens, fc_news.output_tokens
+            n_fc_news = len(fc_news.claim_rows)
 
     # Compose a short_bio from the verified facts when no source handed us a
-    # ready-made narrative. Built from the FULL résumé set (Firecrawl + PDL), so a
-    # PDL-matched person with zero scraped pages still gets a description. Composes
-    # only from structured facts (never new knowledge); tagged synthesis, not a quote.
+    # ready-made narrative. Built from the FULL résumé set (baseline + PDL + any deep
+    # claims), so a PDL-matched person with zero scraped pages still gets a description.
+    # Composes only from structured facts (never new knowledge); tagged synthesis.
     bio = synthesize_bio(anthropic, person.full_name, profile_from_claims(claim_rows))
     if bio is not None:
         claim_rows.append(
@@ -411,25 +489,6 @@ def enrich_person(
                 extraction_method=BIO_SYNTHESIS_METHOD,
             )
         )
-
-    # Firecrawl + Claude news pass: search press/finance domains, scrape the
-    # top hits, and use Haiku to verify identity and extract the mention. Queries
-    # use the verified employer/title (set above) so they reflect what Claude
-    # found, not the raw directory string — more relevant hits, fewer wasted
-    # scrape credits.
-    try:
-        news_disc = discover_news(
-            firecrawl,
-            person.full_name,
-            person.company,
-            verified_employer=_verified_employer,
-            verified_title=_verified_title,
-        )
-    except PaymentRequiredError:
-        news_disc = NewsDiscoveryResult(sources=(), credits_spent=0)
-    fc_news = extract_news_mentions(anthropic, person.full_name, _verified_employer or person.company, news_disc)
-    if fc_news.claim_rows:
-        claim_rows.extend(fc_news.claim_rows)
 
     # Perplexity search + Haiku identity check: confirmed public mentions (bios,
     # profiles, regulatory records). Stored as public_links. Key-gated and
@@ -449,10 +508,25 @@ def enrich_person(
     # budget; gated by Sonar's own is_about_this_person reasoning, then fed — as
     # news_mention claims — through the SAME strict curator below as every other
     # press source. Key-gated and never-raises, like the /search pass.
+    #
+    # Adapt the queries to who the person ACTUALLY is — their verified role + PDL
+    # industry (no hardcoded "finance"), and run targeted asks against their real
+    # past firms (career-spanning search) so a former-employer story surfaces too.
+    _industry = pdl.attributes.current_industry if pdl is not None else ""
+    _past_companies = tuple(
+        dict.fromkeys(  # de-dupe, preserve order
+            cl.company_name
+            for cl in (pdl.career_links if pdl is not None else ())
+            if cl.company_name and not cl.is_current
+        )
+    )
     sonar = discover_press_sonar(
         http, person.full_name,
         _verified_employer or person.company, person.city,
         perplexity_key=perplexity_key,
+        role=_verified_title,
+        industry=_industry,
+        past_companies=_past_companies,
     )
     if sonar.claim_rows:
         claim_rows.extend(sonar.claim_rows)
@@ -573,10 +647,13 @@ def enrich_person(
     # scraped snippet so the feed still populates.
     curated, news_in, news_out = curate_news(
         anthropic, person.full_name, _verified_employer or person.company, clean_rows,
-        # Verify would-be-shown items against the real article (Firecrawl scrape) so
-        # an award page that only name-drops the person is dropped, not shown as
-        # theirs. Scrape credits land in the run's measured credit delta.
-        fetch_article=make_firecrawl_fetcher(firecrawl),
+        # Verify would-be-shown items against the real article using the FREE Jina
+        # reader (not billed Firecrawl) so an award page that only name-drops the
+        # person is dropped, not shown as theirs — at zero credit cost.
+        fetch_article=fetch_article_jina,
+        # Past firms as context so the verifier correctly judges a former-employer
+        # story as still about this person (not a namesake / not firm news).
+        career=_past_companies,
     )
     replace_curated_news(conn, person.id, curated)
 
@@ -585,30 +662,30 @@ def enrich_person(
     n_accept = sum(1 for v in verdicts if v.decision == DECISION_ACCEPT)
     n_review = sum(1 for v in verdicts if v.decision == DECISION_REVIEW)
     n_pre = len(pre.decided)
-    pdl_matched = bool(pdl and pdl.matched)
     n_pdl_claims = (len(pdl.claim_rows) - pdl_dropped) if pdl else 0
     n_mentions = len(mentions.claim_rows)
-    n_fc_news = len(fc_news.claim_rows)
     n_sonar = len(sonar.claim_rows)
     print(
-        f"  {person.full_name}: {len(disc.sources)} sources -> "
+        f"  {person.full_name}: {len(disc.sources)} baseline sources -> "
         f"{n_accept} accepted ({n_pre} by pre-filter), {n_review} to review; "
         f"{len(claim_rows)} claims{' (+synth bio)' if bio else ''}"
         f"{f' (+{n_pdl_claims} PDL)' if n_pdl_claims else ''}"
         f"{f' (-{pdl_dropped} PDL gated)' if pdl_dropped else ''}"
+        f"{' [deep]' if deep else ''}"
         f"{f' (+{n_li} LinkedIn)' if n_li else ''}"
         f"{f' (+{n_fc_news} press)' if n_fc_news else ''}"
         f"{f' (+{n_sonar} sonar press)' if n_sonar else ''}"
         f"{f' (+{n_mentions} verified mentions)' if n_mentions else ''}; "
         f"{len(pre.ambiguous)} sent to Sonnet; "
-        f"{disc.credits_spent + li_credits + news_disc.credits_spent} credits total"
+        f"{career_credits + li_credits + fc_news_credits} Firecrawl credits"
     )
     return _PersonUsage(
-        credits=disc.credits_spent + li_credits,
+        credits=career_credits + li_credits,
         haiku_in=(
             struct.input_tokens
+            + deep_struct_in
             + (bio.input_tokens if bio else 0)
-            + fc_news.input_tokens
+            + fc_news_in
             + rec_in
             + pdl_pv_in
             + kpi_in
@@ -616,18 +693,19 @@ def enrich_person(
         ),
         haiku_out=(
             struct.output_tokens
+            + deep_struct_out
             + (bio.output_tokens if bio else 0)
-            + fc_news.output_tokens
+            + fc_news_out
             + rec_out
             + pdl_pv_out
             + kpi_out
             + news_out
         ),
-        sonnet_in=identity.input_tokens,
-        sonnet_out=identity.output_tokens,
+        sonnet_in=identity.input_tokens + deep_sonnet_in,
+        sonnet_out=identity.output_tokens + deep_sonnet_out,
         pdl_matches=1 if pdl_matched else 0,
         pdl_usd=pdl.cost_usd if pdl else 0.0,
-        fc_news_credits=news_disc.credits_spent,
+        fc_news_credits=fc_news_credits,
         fc_news_articles=n_fc_news,
         perplexity_requests=mentions.perplexity_requests,
         sonar_requests=sonar.requests,
@@ -640,6 +718,7 @@ def run(
     name: str | None,
     titan_class: int | None = None,
     school: str | None = None,
+    max_credits: int | None = None,
 ) -> int:
     firecrawl = Firecrawl(api_key=require_key("FIRECRAWL_API_KEY"))
     anthropic = Anthropic(api_key=require_key("ANTHROPIC_API_KEY"))
@@ -668,6 +747,14 @@ def run(
         # spend is bounded regardless of how many profiles come back thin.
         li_budget = LinkedInBudget(agent_batch_budget(len(people)))
         print(f"LinkedIn agent budget for this run: {li_budget.remaining} credits")
+        # Hard run-level ceiling on the DEEP Firecrawl path (richer career scrape +
+        # news pass + LinkedIn). Default to the live remaining balance so we never
+        # plan to spend credits we don't have; --max-credits lets the operator cap it
+        # lower. Baseline discovery is Firecrawl-free, so this bounds the ONLY
+        # Firecrawl spend in the run.
+        fc_ceiling = credits_before if max_credits is None else min(max_credits, credits_before)
+        fc_budget = FirecrawlBudget(fc_ceiling)
+        print(f"Firecrawl deep-path budget for this run: {fc_budget.remaining} credits")
         est_credits = 0
         haiku_in = haiku_out = sonnet_in = sonnet_out = 0
         pdl_matches = 0
@@ -676,6 +763,7 @@ def run(
         sonar_requests = 0
         sonar_usd = 0.0
         processed = 0
+        pdl_exhausted = False
 
         with httpx.Client(timeout=30.0) as http:
             for person in people:
@@ -683,7 +771,7 @@ def run(
                 try:
                     usage = enrich_person(
                         conn, firecrawl, anthropic, person, http, pdl_key, perplexity_key,
-                        li_budget=li_budget,
+                        li_budget=li_budget, fc_budget=fc_budget,
                     )
                     conn.commit()  # persist each person before moving on (resumable)
                     est_credits += usage.credits + usage.fc_news_credits
@@ -707,6 +795,20 @@ def run(
                         "Already-processed people are saved and will be skipped on re-run.",
                         file=sys.stderr,
                     )
+                    break
+                except PdlUnavailable as exc:
+                    # PDL monthly quota is spent and won't recover this cycle. Per the
+                    # operator's call: do NOT enrich the rest on a degraded (PDL-less)
+                    # path — leave them un-enriched (rolled back → still pending) for a
+                    # future run when PDL renews. Stop the batch cleanly here.
+                    conn.rollback()
+                    print(
+                        f"\n\nPDL QUOTA EXHAUSTED ({exc}) — stopping cleanly.\n"
+                        f"{person.full_name} and all remaining people are left "
+                        "un-enriched (still pending) for a future run when PDL renews.",
+                        file=sys.stderr,
+                    )
+                    pdl_exhausted = True
                     break
                 except Exception as exc:  # noqa: BLE001 - record and continue the batch
                     conn.rollback()
@@ -750,7 +852,9 @@ def run(
                 f"across {processed} people "
                 f"({fc_news_credits} Firecrawl credits)"
             )
-    return 0
+    # Exit 3 signals PDL-quota stop so a multi-cohort runner can break the sequence
+    # instead of re-hitting the exhausted quota on every following cohort.
+    return 3 if pdl_exhausted else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -761,13 +865,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Target an un-enriched cohort by Titan class number")
     p.add_argument("--school", default=None,
                    help="Restrict --class to one school (e.g. 'Texas A&M')")
+    p.add_argument("--max-credits", dest="max_credits", type=int, default=None,
+                   help="Hard ceiling on DEEP Firecrawl credits for this run "
+                        "(baseline discovery is free); defaults to the live balance")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     return run(limit=args.limit, name=args.name,
-               titan_class=args.titan_class, school=args.school)
+               titan_class=args.titan_class, school=args.school,
+               max_credits=args.max_credits)
 
 
 if __name__ == "__main__":

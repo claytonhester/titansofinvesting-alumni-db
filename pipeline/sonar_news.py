@@ -61,8 +61,8 @@ class SonarPressResult:
 _EMPTY = SonarPressResult(claim_rows=(), found=0, kept=0, cost_usd=0.0, requests=0)
 
 _SYSTEM = (
-    "You surface NOTABLE, publicly-documented items about ONE specific person for a "
-    "finance alumni directory, reporting only what cited public sources support. You "
+    "You surface NOTABLE, publicly-documented items about ONE specific person, "
+    "reporting only what cited public sources support. You "
     "are not writing a profile — you surface specific, sourced items where THIS "
     "person is individually the subject. If you cannot tell this person apart from a "
     "namesake, set is_about_this_person=false. Never invent headlines, dates, or "
@@ -98,9 +98,8 @@ _SCHEMA = {
 # the catch-all never returned). So we run a SMALL set of focused asks, each ~$0.008,
 # and pool the results — recall up, cost bounded, the curator still the strict gate.
 _FACETS: tuple[str, ...] = (
-    "an award, honor, ranking, or recognition naming them (40-under-40, Forbes 30 "
-    "Under 30, highest-paid, power lists, fellowships), OR a promotion, new role, or "
-    "a firm/fund they founded or launched",
+    "a significant award, honor, ranking, or industry recognition that names them, "
+    "OR a promotion, new role, or a firm/fund they founded or launched",
     "speaking or voice: a conference panel or keynote, a podcast or media "
     "appearance, an interview, OR thought leadership they authored (op-ed, article, "
     "whitepaper, book)",
@@ -108,14 +107,44 @@ _FACETS: tuple[str, ...] = (
     "OR a board seat, advisory role, or notable nonprofit / community leadership",
 )
 
+# Cap on targeted per-past-company asks (multi-company / career-spanning search).
+_MAX_TARGETED_COMPANIES = 3
 
-def _user(name: str, employer: str, city: str, ask: str) -> str:
+
+def _targeted_company_asks(
+    past_companies: tuple[str, ...], employer: str,
+) -> tuple[str, ...]:
+    """One focused ask per real PAST firm (career-spanning search), capped. Skips
+    blanks and any company equal to the current employer (already covered by the
+    thematic facets)."""
+    current = (employer or "").strip().lower()
+    asks: list[str] = []
+    seen: set[str] = set()
+    for raw in past_companies:
+        name = (raw or "").strip()
+        key = name.lower()
+        if not name or key == current or key in seen:
+            continue
+        seen.add(key)
+        asks.append(
+            f"any item connecting them to {name} — a role, deal, recognition, or "
+            f"commentary tied to their time there"
+        )
+        if len(asks) >= _MAX_TARGETED_COMPANIES:
+            break
+    return tuple(asks)
+
+
+def _user(
+    name: str, employer: str, city: str, ask: str,
+    role: str = "", industry: str = "",
+) -> str:
     emp = employer.strip() if has_meaningful_employer(employer) else ""
     return (
         f"Treat '{name}' as ONE person's full name (first + last) — not a place or "
-        f"company. Person: {name}. They are an alumnus of Titans of Investing (a "
-        f"Texas university finance program) and likely work in finance/investing/"
-        f"business. Known employer: {emp or '(unknown)'}. City: {city or '(unknown)'}.\n\n"
+        f"company. Person: {name}. Role: {role.strip() or '(unknown)'}. "
+        f"Field/industry: {industry.strip() or '(unknown)'}. "
+        f"Known employer: {emp or '(unknown)'}. City: {city or '(unknown)'}.\n\n"
         f"Find items where this person is INDIVIDUALLY the subject — specifically: {ask}.\n\n"
         "Do NOT include: news about their company where they are not named, "
         "team/leadership/bio/profile pages, directory listings, regulatory filings, "
@@ -191,14 +220,14 @@ def _is_iso_date(s: str) -> bool:
 
 def _one_facet(
     http: httpx.Client, key: str, name: str, employer: str, city: str, ask: str,
-    model: str, timeout: float,
+    model: str, timeout: float, role: str = "", industry: str = "",
 ) -> tuple[list[dict], float]:
     """One focused Sonar call → (raw items, cost). Never raises: ([], 0.0) on fail."""
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": _user(name, employer, city, ask)},
+            {"role": "user", "content": _user(name, employer, city, ask, role, industry)},
         ],
         "response_format": {"type": "json_schema", "json_schema": {"schema": _SCHEMA}},
     }
@@ -233,22 +262,31 @@ def discover_press_sonar(
     model: str = DEFAULT_MODEL,
     timeout: float = 90.0,
     facets: tuple[str, ...] | None = None,
+    role: str = "",
+    industry: str = "",
+    past_companies: tuple[str, ...] = (),
 ) -> SonarPressResult:
     """Surface cited, person-specific notable items via Sonar — one focused call per
-    facet (awards/moves, speaking/voice, deals/boards), pooled and de-duped by URL.
-    Each item still passes the is_about gate + aggregator drop here, then the
+    facet (awards/moves, speaking/voice, deals/boards) PLUS up to three targeted
+    asks against the person's real past firms (career-spanning search), pooled and
+    de-duped by URL. Queries adapt to the person's actual role/industry (no hardcoded
+    field). Each item still passes the is_about gate + aggregator drop here, then the
     article-verified curator downstream. Empty (no request/cost) when key or name is
     missing; degrades to empty — never raises — on any API/parse failure."""
     if not perplexity_key or not full_name.strip():
         return _EMPTY
 
-    asks = facets if facets is not None else _FACETS
+    thematic = facets if facets is not None else _FACETS
+    asks = tuple(thematic) + _targeted_company_asks(past_companies, employer)
     cost = 0.0
     requests = 0
     seen: set[str] = set()
     items: list[dict] = []
     for ask in asks:
-        raw, c = _one_facet(http, perplexity_key, full_name, employer, city, ask, model, timeout)
+        raw, c = _one_facet(
+            http, perplexity_key, full_name, employer, city, ask, model, timeout,
+            role=role, industry=industry,
+        )
         cost += c
         requests += 1
         for it in raw:

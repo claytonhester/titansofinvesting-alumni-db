@@ -142,6 +142,51 @@ def test_public_salary_records_host_is_excluded_from_feed():
     assert curated == []
 
 
+# --- career history context (WS2) ---------------------------------------------
+
+from news_curate import _build_user, _build_verify_user  # noqa: E402
+
+
+def test_build_user_includes_career_history_when_provided():
+    text = _build_user(
+        "Jane Doe", "Acme", [("Headline", "snippet")],
+        career=("Goldman Sachs", "UTIMCO"),
+    )
+    assert "Career history" in text
+    assert "Goldman Sachs" in text and "UTIMCO" in text
+
+
+def test_build_user_omits_career_line_when_empty():
+    text = _build_user("Jane Doe", "Acme", [("H", "s")])
+    assert "Career history" not in text
+
+
+def test_build_verify_user_includes_career_history_when_provided():
+    text = _build_verify_user(
+        "Jane Doe", "Acme", "Headline", "snippet", "article text",
+        mentions=2, career=("Lehman Brothers",),
+    )
+    assert "Career history" in text and "Lehman Brothers" in text
+
+
+def test_curate_news_accepts_career_kwarg_back_compat():
+    """Passing career must not change behavior for the no-mentions path."""
+    assert curate_news(None, "Jane", "Acme", [], career=("Goldman Sachs",)) == ([], 0, 0)
+
+
+def test_past_company_item_still_must_clear_the_curator():
+    """A widened-funnel item (e.g. surfaced by a targeted past-company search) gets NO
+    free pass: if the curator judges it not_about, it is dropped like any other."""
+    mentions = [_mention("2020-01-01 — Lehman Brothers files for bankruptcy", "firm news")]
+    client = _client(
+        '[{"index":0,"subject_depth":"not_about","category":"Company News","summary":"x","importance":0.9}]'
+    )
+    curated, _, _ = curate_news(
+        client, "Jane Doe", "Acme", mentions, career=("Lehman Brothers",)
+    )
+    assert curated == []
+
+
 def test_model_error_returns_empty():
     def boom(**_):
         raise RuntimeError("nope")

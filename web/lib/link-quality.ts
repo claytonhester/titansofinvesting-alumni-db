@@ -33,6 +33,8 @@ const DROP_HOSTS = new Set<string>([
   "comparably.com",
   "clay.earth",
   "wwana.com",
+  "thealumniassociation.com",
+  "zoomgov.com",
   "advisor.investedbetter.com",
   // contact / lead / investor-signal data brokers
   "wiza.co",
