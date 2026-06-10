@@ -170,6 +170,30 @@ def classify_seniority_keyword(title: str) -> str:
     return SENIORITY_UNKNOWN
 
 
+def _seniority_rank(title: str) -> int:
+    """Ladder position of a title: 0..N (higher = more senior). Titles the keyword
+    classifier can't place (Unknown) get -1 so they sink below the ranked roles
+    rather than floating to the top."""
+    tier = classify_seniority_keyword(title)
+    try:
+        return SENIORITY_TIERS.index(tier)
+    except ValueError:
+        return -1
+
+
+def order_titles_by_seniority(
+    titles: Sequence[TitleCount],
+) -> tuple[TitleCount, ...]:
+    """Order the title list for the "What they're doing now" card by SENIORITY —
+    most senior position first, least senior last — instead of by raw count.
+    Within a tier the larger count leads, then alphabetical. The input is already
+    the top-N-by-count selection, so every row has people; this only reorders, it
+    never introduces empty/zero rows."""
+    return tuple(
+        sorted(titles, key=lambda t: (-_seniority_rank(t.title), -t.count, t.title))
+    )
+
+
 def seniority_breakdown(
     title_counts: Sequence[tuple[str, int]],
     classifier: Callable[[str], str] = classify_seniority_keyword,
@@ -301,8 +325,8 @@ def build_snapshot(
 
     firms = landing_firms(conn, top_firms)
     all_title_counts = _value_counts(conn, "current_title")
-    titles = tuple(
-        TitleCount(title=v, count=n) for v, n in all_title_counts[:top_titles]
+    titles = order_titles_by_seniority(
+        tuple(TitleCount(title=v, count=n) for v, n in all_title_counts[:top_titles])
     )
     seniority = seniority_breakdown(all_title_counts, classifier)
     founders = founders_partners_count(seniority)

@@ -13,7 +13,8 @@ from dataclasses import dataclass
 import pytest
 
 from insights_llm import canonicalize_titles
-from insights_rollup import clean_title_basic
+from insights_rollup import clean_title_basic, order_titles_by_seniority
+from insights_store import TitleCount
 
 
 @pytest.mark.parametrize(
@@ -116,3 +117,45 @@ def test_unparseable_response_degrades_to_fallback() -> None:
     result = canonicalize_titles(client, counts)
     labels = {t.title for t in result.titles}
     assert labels == {"Managing Director", "Associate"}
+
+
+# --- ordering by seniority (most senior first) ---------------------------
+
+def test_order_titles_by_seniority_ranks_senior_first() -> None:
+    titles = [
+        TitleCount("Associate", 5),
+        TitleCount("Chief Executive Officer", 2),
+        TitleCount("Partner", 8),
+        TitleCount("Vice President", 5),
+        TitleCount("Managing Director", 3),
+    ]
+    ordered = [t.title for t in order_titles_by_seniority(titles)]
+    # C-suite > Partner/Founder > Director/MD > VP > Analyst/Associate
+    assert ordered == [
+        "Chief Executive Officer",
+        "Partner",
+        "Managing Director",
+        "Vice President",
+        "Associate",
+    ]
+
+
+def test_order_within_tier_by_count_then_alpha() -> None:
+    titles = [
+        TitleCount("Senior Associate", 4),
+        TitleCount("Associate", 5),
+        TitleCount("Analyst", 5),
+    ]
+    ordered = [t.title for t in order_titles_by_seniority(titles)]
+    # All same tier (Analyst / Associate): larger count first, then A-Z on ties.
+    assert ordered == ["Analyst", "Associate", "Senior Associate"]
+
+
+def test_unknown_titles_sink_to_bottom() -> None:
+    titles = [
+        TitleCount("Entrepreneur", 9),  # Unknown — must NOT lead despite big count
+        TitleCount("Vice President", 1),
+        TitleCount("Partner", 1),
+    ]
+    ordered = [t.title for t in order_titles_by_seniority(titles)]
+    assert ordered == ["Partner", "Vice President", "Entrepreneur"]
