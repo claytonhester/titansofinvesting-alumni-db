@@ -29,11 +29,15 @@ from person_company_store import (
 )
 
 _YEARS_RE = re.compile(r"\((\d{4})\s*[-–]\s*(\d{4}|present)\)\s*$", re.IGNORECASE)
+# A trailing SINGLE year — 'Endowment Intern at UTIMCO (2020)'. Left in, the '(2020)'
+# rides into the firm name and defeats the company match ('UTIMCO (2020)' != 'UTIMCO').
+_SINGLE_YEAR_RE = re.compile(r"\((\d{4})\)\s*$")
 
 
 def _parse_career(value: str) -> tuple[str, str, int | None, int | None, bool]:
     """(title, company, start_year, end_year, is_present) from a career_history
-    value like 'Analyst at Citi (2015-2017)' or 'VP at Sage'. Tolerant."""
+    value like 'Analyst at Citi (2015-2017)', 'Intern at UTIMCO (2020)', or
+    'VP at Sage'. Tolerant."""
     v = value.strip()
     start = end = None
     is_present = False
@@ -45,6 +49,11 @@ def _parse_career(value: str) -> tuple[str, str, int | None, int | None, bool]:
         else:
             end = int(m.group(2))
         v = v[: m.start()].strip()
+    else:
+        m1 = _SINGLE_YEAR_RE.search(v)
+        if m1:
+            start = int(m1.group(1))
+            v = v[: m1.start()].strip()
     # Split title / company on the LAST ' at '.
     idx = v.lower().rfind(" at ")
     if idx != -1:
@@ -95,6 +104,12 @@ def backfill(db_path: str = str(DB_PATH)) -> int:
         if not companies:
             print("No enriched companies yet — run company_enrich first.", file=sys.stderr)
             return 1
+        # The CANONICAL firm name per domain. We display this instead of the raw
+        # career-history string, which carries noise the match tolerates but a label
+        # should not: a leaked title ('Associate, Teacher Retirement System of Texas'),
+        # a year suffix ('UTIMCO (2020)'), or a spelling variant ('TPH&Co.' vs
+        # 'TPH & Co.') that would otherwise split one firm across two names.
+        name_by_domain = {domain: name for domain, name in companies}
 
         people = conn.execute(
             "SELECT DISTINCT person_id FROM claims WHERE claim_type = 'career_history'"
@@ -129,7 +144,8 @@ def backfill(db_path: str = str(DB_PATH)) -> int:
                     continue
                 is_current = is_present or domain == current_domain
                 link = PersonCompany(
-                    person_id=pid, domain=domain, company_name=company, title=title,
+                    person_id=pid, domain=domain,
+                    company_name=name_by_domain.get(domain) or company, title=title,
                     start_year=start, end_year=None if is_current else end,
                     is_current=is_current, source="career-match",
                 )
@@ -144,13 +160,18 @@ def backfill(db_path: str = str(DB_PATH)) -> int:
             # Also ensure the current employer is linked even if not in career_history.
             if current_domain and current_domain not in by_domain:
                 by_domain[current_domain] = PersonCompany(
-                    person_id=pid, domain=current_domain, company_name=current_emp,
+                    person_id=pid, domain=current_domain,
+                    company_name=name_by_domain.get(current_domain) or current_emp,
                     title="", start_year=None, end_year=None, is_current=True,
                     source="career-match",
                 )
 
+            # Replace unconditionally (an empty set CLEARS stale career-match links
+            # from a prior run — e.g. a firm that no longer matches under stricter
+            # rules). Safe: people with PDL links were skipped above, so we only ever
+            # rewrite a person's own career-match rows.
+            replace_person_companies(conn, pid, list(by_domain.values()))
             if by_domain:
-                replace_person_companies(conn, pid, list(by_domain.values()))
                 total_links += len(by_domain)
                 people_linked += 1
         conn.commit()

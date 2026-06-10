@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from backfill_person_company import _parse_career, _subset_match
+from backfill_person_company import _parse_career, _subset_match, backfill
 from person_company_store import (
     PersonCompany,
     init_person_company_schema,
@@ -46,6 +46,9 @@ def test_parse_career_extracts_title_company_years() -> None:
     assert co == "Warwick" and s == 2020 and cur is True and e is None
     # no ' at ' -> whole thing is the company
     assert _parse_career("Sage Advisory")[1] == "Sage Advisory"
+    # a trailing SINGLE year is stripped off the firm name (and kept as the start)
+    t, co, s, e, cur = _parse_career("Endowment Intern at UTIMCO (2020)")
+    assert t == "Endowment Intern" and co == "UTIMCO" and s == 2020 and e is None
 
 
 @pytest.mark.unit
@@ -93,3 +96,39 @@ def test_subset_match_rejects_two_char_acronym_collision() -> None:
     # Admin) mis-attributed to Sage Advisory's company page.
     companies = [("sageadvisory.com", "Sage Advisory")]
     assert _subset_match("Shift Admin", companies) == ""
+
+
+def _seed_backfill_db(path: str) -> None:
+    """A minimal DB the career backfill can read: one matched company + a person
+    whose career_history string is noisy (a leaked title, no ' at ' separator)."""
+    c = sqlite3.connect(path)
+    c.executescript(
+        """
+        CREATE TABLE companies (domain TEXT PRIMARY KEY, name TEXT, matched INTEGER);
+        CREATE TABLE claims (person_id INTEGER, claim_type TEXT, value TEXT);
+        """
+    )
+    c.execute("INSERT INTO companies VALUES ('trs.texas.gov', 'Teacher Retirement System of Texas', 1)")
+    # The live Ross Willmann shape: a title comma-prefixed onto the firm, no ' at '.
+    c.execute("INSERT INTO claims VALUES (36, 'career_history', 'Associate, Teacher Retirement System of Texas')")
+    c.commit()
+    c.close()
+
+
+@pytest.mark.unit
+def test_backfill_stores_canonical_company_name_not_raw_career_string(tmp_path) -> None:
+    """The displayed firm name must be the canonical companies.name, not the raw
+    career string that the matcher tolerates — so 'Associate, Teacher Retirement
+    System of Texas' is linked and shown as 'Teacher Retirement System of Texas'."""
+    db = str(tmp_path / "t.db")
+    _seed_backfill_db(db)
+    assert backfill(db) == 0
+    c = sqlite3.connect(db)
+    c.row_factory = sqlite3.Row
+    rows = c.execute(
+        "SELECT domain, company_name FROM person_company WHERE person_id = 36"
+    ).fetchall()
+    c.close()
+    assert len(rows) == 1
+    assert rows[0]["domain"] == "trs.texas.gov"
+    assert rows[0]["company_name"] == "Teacher Retirement System of Texas"  # canonical, no 'Associate,'
