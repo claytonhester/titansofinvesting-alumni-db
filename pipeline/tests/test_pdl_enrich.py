@@ -119,6 +119,29 @@ def test_confident_match_maps_canonical_claims() -> None:
 
 
 @pytest.mark.unit
+def test_plan_gated_boolean_fields_emit_no_claim() -> None:
+    """On limited PDL plans a field you aren't licensed for returns `true` (a
+    presence flag), not the value. That must NOT become a 'True' claim — the field
+    is simply absent. (Live case: location_name=true filled location as 'True'.)"""
+    record = {
+        "likelihood": 9,
+        "data": {
+            "job_title": "Managing Director",
+            "job_company_name": "Apex Capital",
+            "location_name": True,   # plan-gated presence flag, not a place
+        },
+    }
+    client = _client(lambda req: httpx.Response(200, json=record))
+    result = enrich_pdl(
+        client, "key", "Jane Doe", "Apex Capital", "Austin",
+        cost_usd_per_match=_PER_MATCH,
+    )
+    values_by_type = {r.claim_type: r.value for r in result.claim_rows}
+    assert "location" not in values_by_type           # not emitted as 'True'
+    assert values_by_type.get("current_employer") == "Apex Capital"  # real fields still map
+
+
+@pytest.mark.unit
 def test_extracts_skills_and_certifications_as_claims() -> None:
     client = _client(lambda req: httpx.Response(200, json=_full_record()))
     result = enrich_pdl(
