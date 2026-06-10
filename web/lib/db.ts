@@ -336,6 +336,20 @@ export interface PeopleSearchParams {
 
 const SEARCH_MAX_ROWS = 12;
 
+// A firm keyword matches across BOTH the directory's first employer AND the
+// enriched current_employer claim. Matching initial_company alone meant "who
+// works at X" really answered "who STARTED at X" — overclaiming current
+// employment for people who moved on, and missing people who moved INTO the
+// firm/sector. Spanning current_employer makes the answer mean what a visitor
+// expects and surfaces the enriched (detail-rich) alumni for firm/sector queries.
+function firmKeywordClause(bindKey: string): string {
+  return (
+    `(initial_company LIKE :${bindKey} OR people.id IN (` +
+    `SELECT person_id FROM claims ` +
+    `WHERE claim_type = 'current_employer' AND value LIKE :${bindKey}))`
+  );
+}
+
 // Grounded retrieval for the alumni chat. ALL SQL is owned and parameterized
 // here — the model only ever produces typed params, never SQL. Read-only.
 export function searchPeople(params: PeopleSearchParams): Person[] {
@@ -355,19 +369,19 @@ export function searchPeople(params: PeopleSearchParams): Person[] {
     bind.titanClass = params.titanClass;
   }
   if (params.companyKeyword && params.companyKeyword.trim()) {
-    where.push("initial_company LIKE :company");
+    where.push(firmKeywordClause("company"));
     bind.company = `%${params.companyKeyword.trim()}%`;
   }
 
-  // Sector maps to an OR-list of LIKE clauses over the bucket's keywords.
-  // Only a recognized sector name is honored.
+  // Sector maps to an OR-list of firm-keyword clauses over the bucket's
+  // keywords. Only a recognized sector name is honored.
   if (params.sector && SECTOR_NAMES.includes(params.sector)) {
     const rule = SECTOR_RULES.find((r) => r.sector === params.sector);
     if (rule) {
       const ors: string[] = [];
       rule.keywords.forEach((kw, i) => {
         const key = `sec${i}`;
-        ors.push(`initial_company LIKE :${key}`);
+        ors.push(firmKeywordClause(key));
         bind[key] = `%${kw}%`;
       });
       if (ors.length) where.push(`(${ors.join(" OR ")})`);
