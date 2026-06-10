@@ -329,8 +329,11 @@ export interface PeopleSearchParams {
   school?: string;
   titanClass?: number;
   companyKeyword?: string;
-  // One of SECTOR_NAMES. Maps to that bucket's keyword OR-list.
+  // One of SECTOR_NAMES. Matches the enriched current_sector facet (precise) and
+  // falls back to the bucket's first-employer keyword list for un-enriched people.
   sector?: string;
+  // A PDL seniority fragment (e.g. "partner", "vp", "director", "senior").
+  seniority?: string;
   limit?: number;
 }
 
@@ -373,19 +376,36 @@ export function searchPeople(params: PeopleSearchParams): Person[] {
     bind.company = `%${params.companyKeyword.trim()}%`;
   }
 
-  // Sector maps to an OR-list of firm-keyword clauses over the bucket's
-  // keywords. Only a recognized sector name is honored.
+  // Sector matches the ENRICHED current_sector facet first — a controlled-
+  // vocabulary classification of the person's CURRENT employer (so a mover from
+  // banking into a hedge fund matches "Hedge Funds & Asset Mgmt" precisely, which
+  // an employer-name keyword never would). For un-enriched people (no insights
+  // row) we OR in the bucket's first-employer keyword list as a fallback. Only a
+  // recognized sector name is honored.
   if (params.sector && SECTOR_NAMES.includes(params.sector)) {
+    const ors: string[] = [
+      "people.id IN (SELECT person_id FROM person_insights WHERE current_sector = :sectorExact)",
+    ];
+    bind.sectorExact = params.sector;
     const rule = SECTOR_RULES.find((r) => r.sector === params.sector);
     if (rule) {
-      const ors: string[] = [];
       rule.keywords.forEach((kw, i) => {
         const key = `sec${i}`;
         ors.push(firmKeywordClause(key));
         bind[key] = `%${kw}%`;
       });
-      if (ors.length) where.push(`(${ors.join(" OR ")})`);
     }
+    where.push(`(${ors.join(" OR ")})`);
+  }
+
+  // Seniority matches the enriched pdl_seniority facet (e.g. "partner", "vp",
+  // "director", "senior") — only enriched people carry it, so this narrows to
+  // people we can actually vouch for at that level.
+  if (params.seniority && params.seniority.trim()) {
+    where.push(
+      "people.id IN (SELECT person_id FROM person_insights WHERE pdl_seniority LIKE :seniority)"
+    );
+    bind.seniority = `%${params.seniority.trim().toLowerCase()}%`;
   }
 
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";

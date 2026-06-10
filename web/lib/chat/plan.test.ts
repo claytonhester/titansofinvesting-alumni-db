@@ -73,4 +73,9 @@ describe("coerceParams", () => {
       city: "Houston",
     });
   });
+
+  it("keeps a trimmed seniority and drops an empty one", () => {
+    expect(coerceParams({ seniority: "  partner " }).seniority).toBe("partner");
+    expect(coerceParams({ seniority: "   " }).seniority).toBeUndefined();
+  });
 });
