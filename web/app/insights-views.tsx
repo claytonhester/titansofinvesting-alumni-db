@@ -7,7 +7,9 @@ import type {
   CurrentTitle,
   SignatureStat,
 } from "@/lib/insights";
-import type { FirmCluster } from "@/lib/db";
+import type { FirmCluster, SectorMember } from "@/lib/db";
+import { parseBoldSegments } from "@/lib/markdown-bold";
+import SectorModal from "./sector-modal";
 
 interface FirmBar {
   company: string;
@@ -39,6 +41,8 @@ interface InsightsViewsProps {
   geoSpread: GeoBar[];
   schoolSpread: SchoolBar[];
   measuredSectors: SectorBar[];
+  firstJobMembers: SectorMember[];
+  landingMembers: SectorMember[];
 }
 
 function max(values: number[]): number {
@@ -94,6 +98,60 @@ function Bars({
   );
 }
 
+// A sector breakdown card that opens a full drill-down modal on click. The whole
+// card is the affordance (the user asked to "click on the card"); a "View all"
+// hint makes it discoverable and it's keyboard-operable.
+function SectorCard({
+  title,
+  tag,
+  rows,
+  memberCount,
+  onOpen,
+  emptyTitle,
+  emptyNote,
+}: {
+  title: string;
+  tag: string;
+  rows: { label: string; count: number }[];
+  memberCount: number;
+  onOpen: () => void;
+  emptyTitle: string;
+  emptyNote: string;
+}) {
+  const clickable = memberCount > 0;
+  return (
+    <div
+      className={`panel col-6${clickable ? " insight-clickable" : ""}`}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={clickable ? onOpen : undefined}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpen();
+              }
+            }
+          : undefined
+      }
+    >
+      <div className="insight-synthesis-head">
+        <h3>{title}</h3>
+        <span className="col-tag">{tag}</span>
+      </div>
+      {rows.length > 0 ? (
+        <Bars rows={rows} />
+      ) : (
+        <EmptyState title={emptyTitle} note={emptyNote} />
+      )}
+      {clickable && (
+        <div className="insight-viewall">View all {memberCount} alumni &rarr;</div>
+      )}
+    </div>
+  );
+}
+
 export default function InsightsViews(props: InsightsViewsProps) {
   const geoRows = props.geoSpread.map((g) => ({ label: g.city, count: g.count }));
   const schoolRows = props.schoolSpread.map((s) => ({
@@ -115,6 +173,9 @@ export default function InsightsViews(props: InsightsViewsProps) {
   const ladderMax = max(props.seniority.map((s) => s.count));
 
   const [view, setView] = useState<"origins" | "outcomes" | "map">("origins");
+  const [sectorModal, setSectorModal] = useState<"first" | "landing" | null>(
+    null,
+  );
 
   const hasNarrative = props.hasOutcomeData && props.narrative.trim().length > 0;
   const hasScorecard = props.signatureStats.length > 0;
@@ -127,7 +188,15 @@ export default function InsightsViews(props: InsightsViewsProps) {
             <h3>Titans Over Time</h3>
           </div>
           {hasNarrative ? (
-            <p className="insight-narrative">{props.narrative}</p>
+            <p className="insight-narrative">
+              {parseBoldSegments(props.narrative).map((seg, i) =>
+                seg.bold ? (
+                  <strong key={i}>{seg.text}</strong>
+                ) : (
+                  <span key={i}>{seg.text}</span>
+                ),
+              )}
+            </p>
           ) : (
             <EmptyState
               title="No cohort summary yet"
@@ -207,20 +276,15 @@ export default function InsightsViews(props: InsightsViewsProps) {
               )}
             </div>
 
-            <div className="panel col-6">
-              <div className="insight-synthesis-head">
-                <h3>Where their first jobs cluster</h3>
-                <span className="col-tag">first-employer sector · verified</span>
-              </div>
-              {sectorRows.length > 0 ? (
-                <Bars rows={sectorRows} />
-              ) : (
-                <EmptyState
-                  title="No first-job sectors yet"
-                  note="Built from verified first employers — appears as alumni are enriched."
-                />
-              )}
-            </div>
+            <SectorCard
+              title="Where their first jobs cluster"
+              tag="first-employer sector · verified"
+              rows={sectorRows}
+              memberCount={props.firstJobMembers.length}
+              onOpen={() => setSectorModal("first")}
+              emptyTitle="No first-job sectors yet"
+              emptyNote="Built from verified first employers — appears as alumni are enriched."
+            />
 
             <div className="panel col-12">
               <div className="insight-synthesis-head">
@@ -264,20 +328,15 @@ export default function InsightsViews(props: InsightsViewsProps) {
               )}
             </div>
 
-            <div className="panel col-6">
-              <div className="insight-synthesis-head">
-                <h3>Where they land, by sector</h3>
-                <span className="col-tag">current employer · measured</span>
-              </div>
-              {landingSectorRows.length > 0 ? (
-                <Bars rows={landingSectorRows} />
-              ) : (
-                <EmptyState
-                  title="No landing sectors yet"
-                  note="Built from verified current employers — appears as alumni are enriched."
-                />
-              )}
-            </div>
+            <SectorCard
+              title="Where they land, by sector"
+              tag="current employer · measured"
+              rows={landingSectorRows}
+              memberCount={props.landingMembers.length}
+              onOpen={() => setSectorModal("landing")}
+              emptyTitle="No landing sectors yet"
+              emptyNote="Built from verified current employers — appears as alumni are enriched."
+            />
 
             <div className="panel col-6">
               <div className="insight-synthesis-head">
@@ -356,6 +415,23 @@ export default function InsightsViews(props: InsightsViewsProps) {
           </div>
         )}
       </div>
+
+      {sectorModal === "first" && (
+        <SectorModal
+          title="First jobs, by sector"
+          subtitle="Verified first employer"
+          members={props.firstJobMembers}
+          onClose={() => setSectorModal(null)}
+        />
+      )}
+      {sectorModal === "landing" && (
+        <SectorModal
+          title="Where they land, by sector"
+          subtitle="Current employer"
+          members={props.landingMembers}
+          onClose={() => setSectorModal(null)}
+        />
+      )}
     </section>
   );
 }

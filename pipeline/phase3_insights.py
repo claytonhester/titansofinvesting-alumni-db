@@ -33,8 +33,9 @@ from anthropic import Anthropic
 from config import DB_PATH, require_key
 from cost_log import append_entry, build_entry
 from db import connect, init_schema
-from insights_llm import classify_seniority, write_narrative
+from insights_llm import canonicalize_titles, classify_seniority, write_narrative
 from insights_rollup import (
+    DEFAULT_TOP_TITLES,
     _value_counts,
     build_snapshot,
     landing_firms,
@@ -71,6 +72,12 @@ def _apply_llm_overlay(
     seniority_cls = classify_seniority(anthropic, title_counts)
     new_seniority = seniority_cls.tiers or snap.seniority
 
+    # Canonicalize the raw title vocabulary so near-duplicate titles (Associate /
+    # Associate Attorney / Associate – Private Equity; the long product-suffixed
+    # ones) fold into one row, then take the top N for the display card.
+    title_cls = canonicalize_titles(anthropic, title_counts)
+    new_titles = title_cls.titles[:DEFAULT_TOP_TITLES] or snap.current_titles
+
     narrative = write_narrative(
         anthropic,
         people=snap.people_total,
@@ -86,8 +93,13 @@ def _apply_llm_overlay(
         snap,
         narrative=narrative.text,
         seniority=new_seniority,
-        haiku_tokens_in=seniority_cls.input_tokens + narrative.input_tokens,
-        haiku_tokens_out=seniority_cls.output_tokens + narrative.output_tokens,
+        current_titles=new_titles,
+        haiku_tokens_in=(
+            seniority_cls.input_tokens + title_cls.input_tokens + narrative.input_tokens
+        ),
+        haiku_tokens_out=(
+            seniority_cls.output_tokens + title_cls.output_tokens + narrative.output_tokens
+        ),
     )
     return overlaid
 

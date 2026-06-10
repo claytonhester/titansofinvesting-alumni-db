@@ -26,14 +26,16 @@ from dataclasses import dataclass
 
 from anthropic import Anthropic
 
-from insights_rollup import classify_seniority_keyword
+from insights_rollup import classify_seniority_keyword, clean_title_basic
 from insights_store import (
     SENIORITY_TIERS,
     SENIORITY_UNKNOWN,
     FirmCount,
     SeniorityTier,
     SignatureStat,
+    TitleCount,
 )
+from sector_classify import SECTOR_NAMES, classify_sector
 
 # Haiku 4.5 — same cheap, disciplined tier the rest of the pipeline uses.
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
@@ -65,17 +67,92 @@ Rules:
 
 Output ONLY a JSON object mapping each input title to its label, no prose."""
 
-_NARRATIVE_SYSTEM = """You write a short, plain summary of an alumni cohort using \
-ONLY the numbers you are given.
+# Every sector the classifier may emit — fed from the shared taxonomy so the
+# prompt can never drift from SECTOR_NAMES. Anything off-list is rejected in code.
+_ALLOWED_SECTORS = frozenset(SECTOR_NAMES)
+_SECTOR_BULLETS = "\n".join(f'- "{s}"' for s in SECTOR_NAMES)
+
+_SECTOR_SYSTEM = f"""You classify a person's CURRENT sector from their employer, \
+job title, and industry, onto a FIXED list.
+
+You MUST pick EXACTLY ONE label per person, copied verbatim:
+{_SECTOR_BULLETS}
 
 Rules:
-- Every figure in your summary MUST come from the provided numbers. Do NOT \
-invent, estimate, round differently, or infer any statistic.
-- You may rephrase and connect the facts into readable prose. You may NOT add \
-facts that aren't in the numbers (no industries, no names, no trends not shown).
-- Write 2-4 sentences, third person, professional and plain. No editorializing \
-("impressive", "elite"), no preamble, no labels, no markdown.
-- Output ONLY the summary sentences."""
+- Weigh the INDUSTRY most, then the EMPLOYER name, then the TITLE.
+- Choose the sector the person actually works in, not a generic guess.
+- A law firm / attorney -> "Law / Legal". A hospital, clinic, pharma, or \
+biotech -> "Healthcare & Life Sciences". A software / IT / internet company -> \
+"Technology". A real-estate, realty, or property firm -> "Real Estate". An \
+insurer -> "Insurance". A university, college, or school -> "Education & \
+Academia". A nonprofit, foundation, or government body -> "Government & Nonprofit".
+- Keep the finance buckets precise: bulge-bracket / advisory bank -> "Investment \
+Banking"; buyout / growth / credit fund -> "Private Equity & Credit"; hedge fund \
+or asset manager -> "Hedge Funds & Asset Mgmt"; strategy/management consultancy \
+-> "Consulting"; audit / accounting firm -> "Accounting & Audit"; oil, gas, \
+power, mining, or infrastructure -> "Energy & Real Assets".
+- Use "Other / Operating" ONLY when the person works in a general corporate or \
+operating role that none of the named sectors fits. Do NOT guess a sector you \
+can't support.
+- Do NOT invent any label outside the list above.
+
+Output ONLY a JSON object mapping each input NUMBER (as a string) to its label, \
+no prose."""
+
+
+_TITLE_SYSTEM = """You normalize job titles into clean, canonical labels for a \
+directory chart, so near-duplicate titles GROUP together instead of each \
+appearing as its own one-off row.
+
+Rules:
+- Output a clean, human-readable canonical title in Title Case.
+- REMOVE the employer / company / product / team name and any trailing context \
+after a dash, an "at", or a comma that names a place, department, product, or \
+specialty. Examples: "Assistant Professor, Department of Pathology" -> \
+"Assistant Professor"; "AI Governance and Agentic AI Sales Leader (Subject \
+Matter Expert) - IBM UKI Data Platforms" -> "Sales Leader".
+- KEEP seniority / rank words: Senior, Junior, Associate, Assistant, Vice, \
+Managing, Executive, Chief, Lead, Head, Partner, Principal, Director, Founder, \
+Analyst.
+- COLLAPSE a role's function or practice qualifier into the base role so variants \
+group together: "Associate Attorney" -> "Associate"; "Associate - Private Equity" \
+-> "Associate"; "Appellate Partner" -> "Partner". But NEVER drop a seniority word \
+(do not turn "Senior Associate" into "Associate").
+- Reuse the EXACT SAME canonical label for titles that mean the same role, so \
+they merge into one row.
+- Do NOT invent a role the title doesn't state. If a title is already clean and \
+canonical, return it unchanged.
+
+Output ONLY a JSON object mapping each input title (verbatim) to its canonical \
+title, no prose."""
+
+
+_NARRATIVE_SYSTEM = """You write a short cohort summary for an alumni directory \
+using ONLY the numbers you are given. The cards below this summary already show \
+the raw KPIs, so your job is to FRAME them as a story, not restate the list.
+
+Every figure you state MUST come from the provided numbers. Do NOT invent, \
+estimate, round differently, or infer any statistic. You may name a few of the \
+listed top firms; do NOT name any other firm, person, or industry not in the \
+numbers.
+
+Write 2-4 sentences, third person, professional and plain, in this order:
+1. Open with the COVERAGE CAVEAT: state how many alumni have verified profiles \
+out of the cohort total, with the percentage, and frame it as an early read \
+(coverage is still growing).
+2. Then tell the TRAJECTORY: these alumni began as analysts and associates and \
+have been climbing. Lead with the share at Managing Director or above among the \
+most senior class and, if given, the average years from graduation to that rank; \
+then the count holding partner or founder titles. Use the "Founders & partners" \
+KPI verbatim for that count and label it exactly "partner or founder" — do NOT \
+merge it with the C-suite tier or relabel it.
+3. You MAY close by naming two or three of the top landing firms.
+
+Bold the KEY figures with markdown double-asterisks (e.g. **87 of 1,056**, \
+**42%**, **8 years**, **11**). Bold the numbers, not whole sentences — three to \
+five bolded figures total. No editorializing ("impressive", "elite"), no \
+preamble, no labels, no headings.
+Output ONLY the summary sentences."""
 
 
 @dataclass(frozen=True)
@@ -85,6 +162,28 @@ class SeniorityClassification:
     it can be dropped straight onto a snapshot via with_llm_narrative."""
 
     tiers: tuple[SeniorityTier, ...]
+    input_tokens: int
+    output_tokens: int
+
+
+@dataclass(frozen=True)
+class SectorClassification:
+    """LLM sector overlay: labels aligned to the input order, plus token cost.
+    Every label is guaranteed to be one of SECTOR_NAMES (off-list responses fall
+    back to the deterministic classifier)."""
+
+    labels: tuple[str, ...]
+    input_tokens: int
+    output_tokens: int
+
+
+@dataclass(frozen=True)
+class TitleCanonicalization:
+    """LLM title overlay: the regrouped canonical titles (count desc) plus token
+    cost. Near-duplicate raw titles are folded onto a shared canonical label, so
+    the 'What they're doing now' card stops fragmenting one role across rows."""
+
+    titles: tuple[TitleCount, ...]
     input_tokens: int
     output_tokens: int
 
@@ -180,6 +279,119 @@ def classify_seniority(
 
     return SeniorityClassification(
         tiers=tuple(ordered),
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
+    )
+
+
+def classify_sectors(
+    client: Anthropic,
+    items: Sequence[tuple[str, str, str]],
+    *,
+    model: str = HAIKU_MODEL,
+    max_tokens: int = 2048,
+    fallback: Callable[[str, str], str] = classify_sector,
+) -> SectorClassification:
+    """Classify the AMBIGUOUS remainder onto the fixed sector taxonomy with ONE
+    Haiku call. `items` is a list of (employer, title, industry) tuples — pass
+    only the people the deterministic classifier left in the catch-all (callers
+    de-dup first to keep the call small). The model sees employer + title +
+    industry (richer than the keyword classifier, which ignores title), but may
+    ONLY emit a label from SECTOR_NAMES; anything else folds back to the
+    deterministic `fallback(employer, industry)`. Never raises: a bad response
+    degrades entirely to the fallback. Returns labels aligned to input order.
+
+    With no items this returns an empty result at zero token cost."""
+    if not items:
+        return SectorClassification((), 0, 0)
+
+    lines = "\n".join(
+        f'{i}. employer="{c}" title="{t or "(unknown)"}" industry="{ind or "(unknown)"}"'
+        for i, (c, t, ind) in enumerate(items)
+    )
+    user = (
+        "Classify each numbered person into ONE sector. Return a JSON object "
+        'mapping the number (as a string) to the label, e.g. {"0": "Law / Legal"}.'
+        "\n\n" + lines
+    )
+    response = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        system=[
+            {"type": "text", "text": _SECTOR_SYSTEM, "cache_control": {"type": "ephemeral"}}
+        ],
+        messages=[{"role": "user", "content": user}],
+    )
+    text = "".join(b.text for b in response.content if b.type == "text")
+    mapping = _parse_json(text)
+
+    labels: list[str] = []
+    for i, (company, _title, industry) in enumerate(items):
+        proposed = mapping.get(str(i))
+        if isinstance(proposed, str) and proposed in _ALLOWED_SECTORS:
+            labels.append(proposed)
+        else:
+            labels.append(fallback(company, industry))
+
+    return SectorClassification(
+        labels=tuple(labels),
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
+    )
+
+
+def canonicalize_titles(
+    client: Anthropic,
+    title_counts: Sequence[tuple[str, int]],
+    *,
+    model: str = HAIKU_MODEL,
+    max_tokens: int = 3072,
+    fallback: Callable[[str], str] = clean_title_basic,
+) -> TitleCanonicalization:
+    """Fold the raw current-title vocabulary onto clean canonical labels with ONE
+    Haiku call, then regroup the (title, count) pairs by canonical label so
+    near-duplicates merge into a single row (count summed). Any title the model
+    omits or returns blank falls back to the free deterministic `clean_title_basic`
+    tidy-up, so coverage is always total. Never raises: a bad response degrades to
+    the deterministic cleaner for every title. Returns canonical titles ordered by
+    count (desc), then alphabetically.
+
+    With no titles this returns an empty result at zero token cost."""
+    distinct = [(t, n) for t, n in title_counts if t and t.strip()]
+    if not distinct:
+        return TitleCanonicalization((), 0, 0)
+
+    user = (
+        "Normalize each of these job titles. Return a JSON object mapping the "
+        'EXACT input title to its canonical title, e.g. {"Associate Attorney": '
+        '"Associate"}.\n\nTitles:\n'
+        + "\n".join(f"- {t}" for t, _ in distinct)
+    )
+    response = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        system=[
+            {"type": "text", "text": _TITLE_SYSTEM, "cache_control": {"type": "ephemeral"}}
+        ],
+        messages=[{"role": "user", "content": user}],
+    )
+    text = "".join(b.text for b in response.content if b.type == "text")
+    mapping = _parse_json(text)
+
+    def canon(title: str) -> str:
+        proposed = mapping.get(title)
+        if isinstance(proposed, str) and proposed.strip():
+            return proposed.strip()
+        return fallback(title) or title.strip()
+
+    totals: dict[str, int] = {}
+    for title, count in distinct:
+        label = canon(title)
+        totals[label] = totals.get(label, 0) + count
+
+    ordered = sorted(totals.items(), key=lambda kv: (-kv[1], kv[0]))
+    return TitleCanonicalization(
+        titles=tuple(TitleCount(title=t, count=n) for t, n in ordered),
         input_tokens=response.usage.input_tokens,
         output_tokens=response.usage.output_tokens,
     )

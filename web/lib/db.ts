@@ -188,11 +188,75 @@ export interface SectorBreakdown {
   count: number;
 }
 
-// Sector concentration, measured from the fully-populated initial_company
-// column (every alum has a first employer). Firms are bucketed by keyword;
-// anything unmatched falls into "Other / Operating". Read-only — no pipeline
-// pass needed. Ordered longest-keyword-first inside each bucket isn't required
-// since the first matching sector wins per firm.
+// Sector classification — the TS mirror of pipeline `sector_classify.py`. Keep
+// INDUSTRY_MAP, SECTOR_RULES, SECTOR_CATCHALL, and SECTOR_NAMES byte-for-byte in
+// sync with that module (a sync test enforces it). Two signals, in priority
+// order: PDL industry wins when it maps; otherwise employer-name keywords;
+// otherwise the catch-all.
+export const SECTOR_CATCHALL = "Other / Operating";
+
+// PDL `current_industry` -> sector. Checked first; first substring match wins.
+// Bare "financial services" / "research" are intentionally unmapped (too
+// ambiguous) — they fall through to keywords.
+const INDUSTRY_MAP: { sector: string; needles: string[] }[] = [
+  { sector: "Real Estate", needles: ["real estate", "commercial real estate", "reit"] },
+  { sector: "Law / Legal", needles: ["law practice", "legal services", "legal"] },
+  {
+    sector: "Technology",
+    needles: [
+      "computer software",
+      "information technology",
+      "computer hardware",
+      "internet",
+      "semiconductor",
+      "software",
+      "computer networking",
+      "information services",
+      "consumer electronics",
+    ],
+  },
+  {
+    sector: "Healthcare & Life Sciences",
+    needles: [
+      "hospital",
+      "health care",
+      "healthcare",
+      "medical practice",
+      "pharmaceutical",
+      "biotechnology",
+      "health, wellness",
+      "mental health",
+      "medical device",
+    ],
+  },
+  { sector: "Insurance", needles: ["insurance"] },
+  {
+    sector: "Education & Academia",
+    needles: ["higher education", "education management", "e-learning", "edtech"],
+  },
+  {
+    sector: "Government & Nonprofit",
+    needles: [
+      "non-profit",
+      "nonprofit",
+      "government administration",
+      "philanthropy",
+      "public policy",
+      "think tanks",
+      "international affairs",
+      "civic",
+      "political organization",
+    ],
+  },
+  { sector: "Private Equity & Credit", needles: ["venture capital", "private equity"] },
+  { sector: "Hedge Funds & Asset Mgmt", needles: ["investment management", "asset management"] },
+  { sector: "Investment Banking", needles: ["investment banking", "banking"] },
+  { sector: "Consulting", needles: ["management consulting"] },
+  { sector: "Accounting & Audit", needles: ["accounting"] },
+  { sector: "Energy & Real Assets", needles: ["oil & energy", "oil", "utilities", "mining", "renewables"] },
+];
+
+// Employer-name keywords (fallback when industry is absent or unmapped).
 const SECTOR_RULES: { sector: string; keywords: string[] }[] = [
   {
     sector: "Investment Banking",
@@ -226,7 +290,7 @@ const SECTOR_RULES: { sector: string; keywords: string[] }[] = [
     sector: "Consulting",
     keywords: [
       "mckinsey",
-      "bain",
+      "bain & company",
       "boston consulting",
       "bcg",
       "accenture",
@@ -234,7 +298,6 @@ const SECTOR_RULES: { sector: string; keywords: string[] }[] = [
       "l.e.k",
       "booz",
       "alvarez",
-      "ats",
       "consulting",
     ],
   },
@@ -248,7 +311,42 @@ const SECTOR_RULES: { sector: string; keywords: string[] }[] = [
       "kpmg",
       "grant thornton",
       "bdo",
-      "ey",
+      "ey ",
+    ],
+  },
+  {
+    sector: "Law / Legal",
+    keywords: [
+      "law firm",
+      "law offices",
+      "llp",
+      "attorneys",
+      "akin gump",
+      "kirkland",
+      "latham",
+      "skadden",
+      "sidley",
+      "vinson",
+      "baker botts",
+      "jones day",
+      "gibson dunn",
+      "wachtell",
+      "& feld",
+    ],
+  },
+  {
+    sector: "Real Estate",
+    keywords: [
+      "real estate",
+      "realty",
+      "properties",
+      "property group",
+      "cbre",
+      "jll",
+      "hines",
+      "trammell crow",
+      "american campus",
+      "realtors",
     ],
   },
   {
@@ -265,7 +363,6 @@ const SECTOR_RULES: { sector: string; keywords: string[] }[] = [
       "bain capital",
       "private equity",
       "capital partners",
-      "partners",
       "holdings",
       "equity",
     ],
@@ -290,6 +387,52 @@ const SECTOR_RULES: { sector: string; keywords: string[] }[] = [
     ],
   },
   {
+    sector: "Healthcare & Life Sciences",
+    keywords: [
+      "hospital",
+      "health system",
+      "healthcare",
+      "health care",
+      "clinic",
+      "pharma",
+      "biotech",
+      "abbott",
+      "medtronic",
+      "pfizer",
+      "merck",
+    ],
+  },
+  {
+    sector: "Technology",
+    keywords: [
+      "google",
+      "microsoft",
+      "amazon",
+      "meta",
+      "apple",
+      "salesforce",
+      "oracle",
+      "nvidia",
+      "software",
+      "technologies",
+      "labs",
+      "ai",
+    ],
+  },
+  {
+    sector: "Insurance",
+    keywords: [
+      "insurance",
+      "assurance",
+      "reinsurance",
+      "aig",
+      "chubb",
+      "metlife",
+      "prudential",
+      "allstate",
+    ],
+  },
+  {
     sector: "Energy & Real Assets",
     keywords: [
       "exxon",
@@ -309,20 +452,68 @@ const SECTOR_RULES: { sector: string; keywords: string[] }[] = [
       "midstream",
     ],
   },
+  {
+    sector: "Education & Academia",
+    keywords: ["university", "college", "school district", "academy", "institute"],
+  },
+  {
+    sector: "Government & Nonprofit",
+    keywords: [
+      "foundation",
+      "nonprofit",
+      "non-profit",
+      "department of",
+      "city of",
+      "county of",
+      "federal",
+      "ministry",
+      "united nations",
+    ],
+  },
 ];
 
-function classifySector(company: string): string {
+function matchIndustry(industry: string): string | null {
+  const s = industry.toLowerCase().trim();
+  if (!s) return null;
+  for (const { sector, needles } of INDUSTRY_MAP) {
+    if (needles.some((n) => s.includes(n))) return sector;
+  }
+  return null;
+}
+
+function matchCompany(company: string): string | null {
   const c = company.toLowerCase();
+  if (!c.trim()) return null;
   for (const rule of SECTOR_RULES) {
     if (rule.keywords.some((k) => c.includes(k))) return rule.sector;
   }
-  return "Other / Operating";
+  return null;
 }
 
-// Valid sector labels the chat planner may request. Kept in sync with
-// SECTOR_RULES so an unknown/garbage sector string from the model is ignored
-// rather than silently matching nothing.
-export const SECTOR_NAMES: readonly string[] = SECTOR_RULES.map((r) => r.sector);
+// PDL industry wins when it maps; else employer-name keywords; else catch-all.
+function classifySector(company: string, industry = ""): string {
+  return matchIndustry(industry) ?? matchCompany(company) ?? SECTOR_CATCHALL;
+}
+
+// Every sector label this taxonomy can emit, in display/priority order, catch-
+// all last. Mirrors py SECTOR_NAMES. Used to validate chat-planner sector
+// requests and to drive the search facet fallback.
+export const SECTOR_NAMES: readonly string[] = [
+  "Investment Banking",
+  "Private Equity & Credit",
+  "Hedge Funds & Asset Mgmt",
+  "Consulting",
+  "Accounting & Audit",
+  "Energy & Real Assets",
+  "Real Estate",
+  "Law / Legal",
+  "Technology",
+  "Healthcare & Life Sciences",
+  "Insurance",
+  "Education & Academia",
+  "Government & Nonprofit",
+  SECTOR_CATCHALL,
+];
 
 export interface PeopleSearchParams {
   city?: string;
@@ -539,27 +730,85 @@ export function firstEmployerFirms(limit = 8): FirmBreakdown[] {
 }
 
 export function firstEmployerSectors(): SectorBreakdown[] {
-  let rows: FirmBreakdown[];
+  // Reads the STORED first_sector (classified by the pipeline under the full
+  // industry+keyword+Haiku taxonomy), not a live name-keyword guess — so the
+  // card matches the modal and the landing card exactly.
   try {
-    rows = db()
+    return db()
       .prepare(
-        `SELECT first_employer AS company, COUNT(*) AS count
+        `SELECT first_sector AS sector, COUNT(*) AS count
          FROM person_insights
-         WHERE TRIM(first_employer) <> ''
-         GROUP BY first_employer`
+         WHERE TRIM(COALESCE(first_sector, '')) <> ''
+         GROUP BY first_sector
+         ORDER BY count DESC`
       )
-      .all() as FirmBreakdown[];
+      .all() as SectorBreakdown[];
   } catch {
     return [];
   }
-  const tally = new Map<string, number>();
-  for (const { company, count } of rows) {
-    const sector = classifySector(company);
-    tally.set(sector, (tally.get(sector) ?? 0) + count);
+}
+
+export interface SectorMember {
+  sector: string;
+  name: string;
+  slug: string;
+  school: string;
+  titanClass: number;
+  employer: string;
+  industry: string;
+}
+
+// Per-person rows behind the LANDING sector card: current employer + raw PDL
+// industry, joined to the person. Powers the drill-down modal — every person in
+// every bucket, nothing collapsed. Ordered so the modal can group by sector.
+export function landingSectorMembers(): SectorMember[] {
+  try {
+    return db()
+      .prepare(
+        `SELECT
+           pi.current_sector AS sector,
+           p.full_name       AS name,
+           p.name_slug       AS slug,
+           p.school          AS school,
+           p.titan_class     AS titanClass,
+           COALESCE((SELECT c.value FROM claims c
+                       WHERE c.person_id = pi.person_id
+                         AND c.claim_type = 'current_employer' LIMIT 1), '') AS employer,
+           COALESCE(pi.current_industry, '') AS industry
+         FROM person_insights pi
+         JOIN people p ON p.id = pi.person_id
+         WHERE TRIM(COALESCE(pi.current_sector, '')) <> ''
+         ORDER BY pi.current_sector, p.full_name`
+      )
+      .all() as SectorMember[];
+  } catch {
+    return [];
   }
-  return [...tally.entries()]
-    .map(([sector, count]) => ({ sector, count }))
-    .sort((a, b) => b.count - a.count);
+}
+
+// Per-person rows behind the FIRST-JOB sector card: the verified first employer
+// (first jobs have no industry on record, so industry is left blank).
+export function firstJobSectorMembers(): SectorMember[] {
+  try {
+    return db()
+      .prepare(
+        `SELECT
+           pi.first_sector AS sector,
+           p.full_name     AS name,
+           p.name_slug     AS slug,
+           p.school        AS school,
+           p.titan_class   AS titanClass,
+           COALESCE(pi.first_employer, '') AS employer,
+           ''              AS industry
+         FROM person_insights pi
+         JOIN people p ON p.id = pi.person_id
+         WHERE TRIM(COALESCE(pi.first_sector, '')) <> ''
+         ORDER BY pi.first_sector, p.full_name`
+      )
+      .all() as SectorMember[];
+  } catch {
+    return [];
+  }
 }
 
 export interface ClassSpread {

@@ -1,15 +1,19 @@
 import {
   firstEmployerFirms,
   firstEmployerSectors,
+  firstJobSectorMembers,
+  landingSectorMembers,
   firmClusters,
   currentGeoSpread,
   schoolBreakdown,
   latestInsightsSnapshot,
+  SECTOR_CATCHALL,
   type FirmBreakdown,
   type FirmCluster,
   type GeoSpread,
   type SchoolBreakdown,
   type SectorBreakdown,
+  type SectorMember,
 } from "./db";
 
 // "Overview & Insights" intelligence layer, built to drive two comparable
@@ -60,6 +64,9 @@ export interface AlumniInsights {
   geoSpread: GeoSpread[];
   schoolSpread: SchoolBreakdown[];
   measuredSectors: SectorBreakdown[];
+  // Per-person rows behind each sector card, for the drill-down modal.
+  firstJobMembers: SectorMember[];
+  landingMembers: SectorMember[];
   total: number;
   // MEASURED WHEN ENRICHED — empty until the pipeline writes a snapshot with
   // at least one enriched person. No mock fallback.
@@ -75,18 +82,22 @@ export interface AlumniInsights {
 }
 
 // Keep the catch-all in the chart for honesty, but always last so the named
-// sectors read as the concentration story.
-const SECTOR_CATCHALL = "Other / Operating";
+// sectors read as the concentration story. SECTOR_CATCHALL is imported from db
+// so the label stays in one place.
 
 export function getAlumniInsights(): AlumniInsights {
   const schoolSpread = schoolBreakdown();
   const total = schoolSpread.reduce((sum, s) => sum + s.count, 0);
 
+  // Push the catch-all to the end so the named sectors read as the concentration
+  // story (a big "Other" bar leading the chart buries the real signal).
+  const catchAllLast = (rows: SectorBreakdown[]): SectorBreakdown[] => [
+    ...rows.filter((s) => s.sector !== SECTOR_CATCHALL),
+    ...rows.filter((s) => s.sector === SECTOR_CATCHALL),
+  ];
+
   // First-job sectors from the VERIFIED first employer (empty until enriched).
-  const allSectors = firstEmployerSectors();
-  const named = allSectors.filter((s) => s.sector !== SECTOR_CATCHALL);
-  const catchAll = allSectors.filter((s) => s.sector === SECTOR_CATCHALL);
-  const measuredSectors = [...named, ...catchAll];
+  const measuredSectors = catchAllLast(firstEmployerSectors());
 
   // Outcome data is real the moment the pipeline has enriched anyone — we do NOT
   // wait for the is_sample coverage gate, so small test batches are visible. We
@@ -99,10 +110,12 @@ export function getAlumniInsights(): AlumniInsights {
     geoSpread: currentGeoSpread(8),
     schoolSpread,
     measuredSectors,
+    firstJobMembers: firstJobSectorMembers(),
+    landingMembers: landingSectorMembers(),
     total,
     narrative: hasOutcomeData ? snapshot!.narrative : "",
     landingFirms: hasOutcomeData ? snapshot!.landing_firms : [],
-    landingSectors: hasOutcomeData ? snapshot!.landing_sectors : [],
+    landingSectors: hasOutcomeData ? catchAllLast(snapshot!.landing_sectors) : [],
     seniority: hasOutcomeData ? snapshot!.seniority : [],
     currentTitles: hasOutcomeData ? snapshot!.current_titles : [],
     signatureStats: hasOutcomeData ? snapshot!.signature_stats : [],
