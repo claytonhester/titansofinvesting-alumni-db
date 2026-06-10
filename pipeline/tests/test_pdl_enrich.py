@@ -344,3 +344,43 @@ def test_network_failure_degrades_to_empty() -> None:
     assert result.matched is False
     assert result.claim_rows == ()
     assert result.cost_usd == 0.0
+
+
+@pytest.mark.unit
+def test_402_quota_exhausted_raises_pdl_unavailable() -> None:
+    """A 402 = monthly quota spent. Raise PdlUnavailable so the orchestrator stops
+    and leaves the rest un-enriched (no degraded path), not a silent empty."""
+    from pdl_enrich import PdlUnavailable
+
+    client = _client(lambda req: httpx.Response(402, json={"error": "quota"}))
+    with pytest.raises(PdlUnavailable):
+        enrich_pdl(
+            client, "key", "Jane Doe", "Apex Capital", "Austin",
+            cost_usd_per_match=_PER_MATCH,
+        )
+
+
+@pytest.mark.unit
+def test_persistent_429_raises_pdl_unavailable() -> None:
+    """A 429 that outlasts retries (we're well under the rate limit) means the quota
+    is spent → PdlUnavailable, not an empty result."""
+    from pdl_enrich import PdlUnavailable
+
+    client = _client(lambda req: httpx.Response(429, json={"error": "rate"}))
+    with pytest.raises(PdlUnavailable):
+        enrich_pdl(
+            client, "key", "Jane Doe", "Apex Capital", "Austin",
+            cost_usd_per_match=_PER_MATCH, attempts=2, backoff_base=0.0,
+        )
+
+
+@pytest.mark.unit
+def test_server_5xx_still_degrades_to_empty_not_raise() -> None:
+    """A transient 5xx is NOT quota exhaustion — it must still degrade to empty
+    (never raise), so a momentary PDL hiccup doesn't halt the whole batch."""
+    client = _client(lambda req: httpx.Response(503, json={"error": "oops"}))
+    result = enrich_pdl(
+        client, "key", "Jane Doe", "Apex Capital", "Austin",
+        cost_usd_per_match=_PER_MATCH, attempts=2, backoff_base=0.0,
+    )
+    assert result.matched is False and result.claim_rows == () and result.cost_usd == 0.0

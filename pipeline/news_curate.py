@@ -225,13 +225,17 @@ Return ONLY a JSON array, one object per candidate, SAME order:
 "category": "<one of the five>", "summary": "<one line>", "importance": <float>}]"""
 
 
-def _build_user(name: str, employer: str, articles: list[tuple[str, str]]) -> str:
+def _build_user(
+    name: str, employer: str, articles: list[tuple[str, str]],
+    career: tuple[str, ...] = (),
+) -> str:
     lines = [
         f"Person: {name}",
         f"Known employer: {employer or '(unknown)'}",
-        "",
-        "Articles:",
     ]
+    if career:
+        lines.append(f"Career history (past firms): {', '.join(career)}")
+    lines += ["", "Articles:"]
     for i, (headline, snippet) in enumerate(articles):
         lines.append(f"[{i}] HEADLINE: {headline}")
         if snippet:
@@ -333,13 +337,15 @@ Return ONLY JSON: {"subject_depth":"..","headline":"..","category":"..","summary
 
 def _build_verify_user(
     name: str, employer: str, headline: str, snippet: str, article: str,
-    mentions: int = 0,
+    mentions: int = 0, career: tuple[str, ...] = (),
 ) -> str:
     lines = [
         f"Person: {name}",
         f"Known employer: {employer or '(unknown)'}",
-        f"Candidate headline: {headline}",
     ]
+    if career:
+        lines.append(f"Career history (past firms): {', '.join(career)}")
+    lines.append(f"Candidate headline: {headline}")
     if snippet:
         lines.append(f"Snippet: {snippet[:300]}")
     if mentions:
@@ -366,6 +372,7 @@ def _verify_item(
     model: str,
     max_tokens: int,
     mentions: int = 0,
+    career: tuple[str, ...] = (),
 ) -> tuple[tuple[float, CuratedNews] | None, int, int]:
     """Confirm one would-be-shown item against the article. Returns (kept, in, out)
     where kept is a (rank, CuratedNews) to keep or None to drop.
@@ -388,7 +395,7 @@ def _verify_item(
             temperature=0,
             system=[{"type": "text", "text": _VERIFY_SYSTEM, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": _build_verify_user(
-                name, employer, item.headline, snippet, article, mentions
+                name, employer, item.headline, snippet, article, mentions, career
             )}],
         )
         text = "".join(b.text for b in resp.content if b.type == "text")
@@ -452,6 +459,7 @@ def curate_news(
     model: str = HAIKU_MODEL,
     max_tokens: int = 1024,
     fetch_article: Callable[[str], str] | None = None,
+    career: tuple[str, ...] = (),
 ) -> tuple[list[CuratedNews], int, int]:
     """Curate a person's press mentions. Returns (curated, haiku_in, haiku_out).
     Reads news_mention claims AND press-worthy public_links (see news_items), so
@@ -476,7 +484,8 @@ def curate_news(
                 temperature=0,
                 system=[{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": _build_user(
-                    name, employer, [(h, c.quote) for (_, h), c in zip(articles, items)]
+                    name, employer,
+                    [(h, c.quote) for (_, h), c in zip(articles, items)], career,
                 )}],
             )
             text = "".join(b.text for b in response.content if b.type == "text")
@@ -544,7 +553,7 @@ def curate_news(
             article = name_window(raw, name)
             kept, vin, vout = _verify_item(
                 client, name, employer, rank, item, snippet, article,
-                model=model, max_tokens=512, mentions=mentions,
+                model=model, max_tokens=512, mentions=mentions, career=career,
             )
             tok_in += vin
             tok_out += vout

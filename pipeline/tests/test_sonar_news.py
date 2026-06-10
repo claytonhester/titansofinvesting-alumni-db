@@ -184,6 +184,95 @@ def test_malformed_content_degrades_to_empty() -> None:
     assert result.claim_rows == () and result.cost_usd == pytest.approx(0.01)
 
 
+def _capturing(captured: list[dict]) -> httpx.Client:
+    """A client that records each request payload and returns an empty result."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(req.content))
+        return httpx.Response(200, json=_body([]))
+    return _client(handler)
+
+
+@pytest.mark.unit
+def test_prompts_are_not_finance_biased() -> None:
+    """The system/user prompts must NOT hardcode finance or mention the program —
+    that biases search for non-finance alumni (lawyers, operators) and surfaces
+    directory/LinkedIn noise. With no role/industry known, the prompt stays neutral."""
+    captured: list[dict] = []
+    discover_press_sonar(
+        _capturing(captured), "Jane Doe", "Apex", "Austin",
+        perplexity_key="key", facets=("x",),
+    )
+    system = captured[0]["messages"][0]["content"]
+    user = captured[0]["messages"][1]["content"]
+    assert "finance alumni directory" not in system
+    assert "Titans of Investing" not in user
+    assert "finance/investing/business" not in user
+    assert "likely work in finance" not in user
+    # neutral fallback when we don't know their role/field
+    assert "(unknown)" in user
+
+
+@pytest.mark.unit
+def test_role_and_industry_injected_when_known() -> None:
+    """When we DO know the person's role/field, the prompt adapts to them."""
+    captured: list[dict] = []
+    discover_press_sonar(
+        _capturing(captured), "Jane Doe", "Vinson & Elkins", "Houston",
+        perplexity_key="key", facets=("x",),
+        role="Partner", industry="Legal Services",
+    )
+    user = captured[0]["messages"][1]["content"]
+    assert "Partner" in user
+    assert "Legal Services" in user
+
+
+@pytest.mark.unit
+def test_award_facet_is_not_an_enumerated_list() -> None:
+    """The award facet asks generally for recognition — no 40u40/30u30 laundry list
+    (the enumeration dragged in junk and biased toward named lists)."""
+    from sonar_news import _FACETS
+
+    award = _FACETS[0].lower()
+    assert "40-under-40" not in award
+    assert "30 under 30" not in award
+    assert "power list" not in award
+    assert "fellowship" not in award
+    assert "award" in award or "recognition" in award
+
+
+@pytest.mark.unit
+def test_targeted_past_company_asks_added_and_capped_at_three() -> None:
+    """Multi-company search: one targeted ask per real past firm, capped at 3,
+    on top of the thematic facets, all pooled into one result."""
+    captured: list[dict] = []
+    discover_press_sonar(
+        _capturing(captured), "Jane Doe", "Apex", "Austin", perplexity_key="key",
+        facets=("thematic",),
+        past_companies=("Goldman Sachs", "UTIMCO", "Bridgewater", "Citadel"),
+    )
+    assert len(captured) == 4  # 1 thematic + 3 targeted (4th company dropped by cap)
+    user_texts = " ".join(c["messages"][1]["content"] for c in captured)
+    assert "Goldman Sachs" in user_texts
+    assert "UTIMCO" in user_texts
+    assert "Bridgewater" in user_texts
+    assert "Citadel" not in user_texts  # capped at 3
+
+
+@pytest.mark.unit
+def test_targeted_asks_skip_current_employer_and_blanks() -> None:
+    """A past-company equal to the current employer (already searched by the thematic
+    facets) and blank entries are skipped."""
+    captured: list[dict] = []
+    discover_press_sonar(
+        _capturing(captured), "Jane Doe", "Apex Capital", "Austin", perplexity_key="key",
+        facets=("thematic",),
+        past_companies=("Apex Capital", "", "   ", "Lehman Brothers"),
+    )
+    assert len(captured) == 2  # 1 thematic + 1 targeted (only Lehman survives)
+    user_texts = " ".join(c["messages"][1]["content"] for c in captured)
+    assert "Lehman Brothers" in user_texts
+
+
 @pytest.mark.unit
 def test_multiple_facets_pool_and_dedupe_by_url() -> None:
     """Each facet is its own call; results pool and de-dupe by URL, cost sums."""

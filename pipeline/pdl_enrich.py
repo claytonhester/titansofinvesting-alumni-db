@@ -23,7 +23,7 @@ Firecrawl/Sonnet path still completes. Public data only; no auth, no logins.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
@@ -32,6 +32,17 @@ from enrichment_store import ClaimRow
 
 PDL_ENRICH_URL = "https://api.peopledatalabs.com/v5/person/enrich"
 EXTRACTION_METHOD = "pdl"
+
+
+class PdlUnavailable(Exception):
+    """PDL cannot serve the request because the monthly enrichment quota is spent
+    (HTTP 402, or a 429 that survives our retries — we run far under the per-minute
+    rate limit, so a persistent 429 means the quota, not throttling).
+
+    Raised — deliberately — so the orchestrator STOPS the batch cleanly and leaves the
+    remaining people un-enriched (still pending, re-runnable when the quota renews),
+    rather than silently falling back to a PDL-less baseline path for them. This is
+    the ONLY case enrich_pdl raises; every other failure still degrades to empty."""
 
 # Skills are noisy and long-tailed; keep the most relevant handful.
 MAX_SKILLS = 12
@@ -114,7 +125,9 @@ def enrich_pdl(
 ) -> PdlResult:
     """Query PDL for one person, gate on likelihood, and map a confident match to
     canonical ClaimRows. Returns an empty result (no claims, no cost) on a miss,
-    a below-gate likelihood, or any network/parse failure — never raises."""
+    a below-gate likelihood, or any network/parse failure. Raises PdlUnavailable
+    ONLY when the monthly quota is exhausted (402 / persistent 429) so the caller can
+    stop the batch and leave the rest un-enriched rather than degrade them."""
     name = full_name.strip()
     if not name:
         return _EMPTY
@@ -182,12 +195,19 @@ def _get_with_retry(
             return body if isinstance(body, dict) else None
         if resp.status_code == 404:
             return None  # no confident match — free, by design
+        if resp.status_code == 402:
+            # Monthly enrichment quota exhausted — won't recover until renewal.
+            raise PdlUnavailable("PDL enrichment quota exhausted (HTTP 402)")
         if resp.status_code == 429 or resp.status_code >= 500:
             if attempt == attempts - 1:
+                # A 429 that outlasts our retries means the monthly quota is spent
+                # (we run well under the per-minute rate limit). 5xx is transient.
+                if resp.status_code == 429:
+                    raise PdlUnavailable("PDL quota exhausted (HTTP 429)")
                 return None
             time.sleep(backoff_base ** attempt)
             continue
-        # 4xx other than 404/429 (bad key, bad request): retrying can't help.
+        # 4xx other than 404/402/429 (bad key, bad request): retrying can't help.
         return None
     return None
 
