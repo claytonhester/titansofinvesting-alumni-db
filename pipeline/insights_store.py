@@ -87,6 +87,10 @@ class SignatureStat:
     value: str
     detail: str
     pct: int
+    # Stable identifier for the metric (e.g. "buy_side", "reached_md"), so the web
+    # can wire each scorecard tile to its people drill-down without matching the
+    # display label. Empty on pre-key snapshots (the tile is then non-clickable).
+    key: str = ""
 
 
 @dataclass(frozen=True)
@@ -141,7 +145,7 @@ def _payload_dict(snap: InsightsSnapshot) -> dict:
         "current_titles": [{"title": t.title, "count": t.count} for t in snap.current_titles],
         "seniority": [{"tier": s.tier, "count": s.count} for s in snap.seniority],
         "signature_stats": [
-            {"label": s.label, "value": s.value, "detail": s.detail, "pct": s.pct}
+            {"label": s.label, "value": s.value, "detail": s.detail, "pct": s.pct, "key": s.key}
             for s in snap.signature_stats
         ],
         "landing_sectors": [
@@ -214,7 +218,13 @@ def latest_snapshot(conn: sqlite3.Connection) -> InsightsSnapshot | None:
             SeniorityTier(s["tier"], s["count"]) for s in payload.get("seniority", [])
         ),
         signature_stats=tuple(
-            SignatureStat(s["label"], s["value"], s["detail"], s["pct"])
+            SignatureStat(
+                label=s["label"],
+                value=s["value"],
+                detail=s["detail"],
+                pct=s["pct"],
+                key=s.get("key", ""),
+            )
             for s in payload.get("signature_stats", [])
         ),
         landing_sectors=tuple(

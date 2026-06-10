@@ -3,6 +3,8 @@ import {
   firstEmployerSectors,
   firstJobSectorMembers,
   landingSectorMembers,
+  kpiMembers,
+  KPI_KEYS,
   firmClusters,
   currentGeoSpread,
   schoolBreakdown,
@@ -11,6 +13,7 @@ import {
   type FirmBreakdown,
   type FirmCluster,
   type GeoSpread,
+  type KpiMember,
   type SchoolBreakdown,
   type SectorBreakdown,
   type SectorMember,
@@ -56,6 +59,8 @@ export interface SignatureStat {
   value: string;
   detail: string;
   pct: number;
+  // Stable metric id (e.g. "buy_side") for wiring the tile to its people modal.
+  key: string;
 }
 
 export interface AlumniInsights {
@@ -67,6 +72,8 @@ export interface AlumniInsights {
   // Per-person rows behind each sector card, for the drill-down modal.
   firstJobMembers: SectorMember[];
   landingMembers: SectorMember[];
+  // People behind each scorecard KPI, keyed by metric id, for the KPI modal.
+  kpiMembers: Record<string, KpiMember[]>;
   total: number;
   // MEASURED WHEN ENRICHED — empty until the pipeline writes a snapshot with
   // at least one enriched person. No mock fallback.
@@ -112,6 +119,7 @@ export function getAlumniInsights(): AlumniInsights {
     measuredSectors,
     firstJobMembers: firstJobSectorMembers(),
     landingMembers: landingSectorMembers(),
+    kpiMembers: Object.fromEntries(KPI_KEYS.map((k) => [k, kpiMembers(k)])),
     total,
     narrative: hasOutcomeData ? snapshot!.narrative : "",
     landingFirms: hasOutcomeData ? snapshot!.landing_firms : [],
