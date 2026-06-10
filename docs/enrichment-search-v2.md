@@ -97,10 +97,17 @@ live as `claim_type='skill'`. None of it is searchable yet.
 
 ## Sequencing (de-risks the spend)
 
-**Phase 0 — build the search layer first, on the existing 48 (cost: ~$5, mostly build).**
-Ship B + C against the *current* data. Prove semantic + faceted search works and is
-better before spending a dollar on coverage. This is the key risk-reducer: you see
-the stronger product for ~free.
+**Phase 0 — build the search layer first, on the existing 48 — ✅ DONE (cost: ~$0).**
+Shipped B + C against the *current* data, proving the stronger search before any
+coverage spend:
+- Faceted search on `current_sector` + `pdl_seniority` (commit b402693).
+- Local semantic search — in-process all-MiniLM-L6-v2 embeddings, hybrid merge,
+  `npm run embed` to (re)build vectors (commit 4fc9f42). Verified live: "who moved
+  from engineering into finance?" surfaces the engineer-turned-investors that no
+  keyword/facet filter could find. `npm audit` clean; production build verified.
+- **Re-embed flow:** vectors live in the pipeline DB (`person_vectors`) so they ride
+  `sync-db` into the web snapshot (which is overwritten each build). After any
+  enrichment batch: `npm run embed` (writes to the pipeline DB) → `npm run sync-db`.
 
 **Phase 1 — run gated deep enrichment over the 1,008 (cost: ~$465).**
 Dry-run + cost cap + DB backup (all already built into the runners). Meter the deep
