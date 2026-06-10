@@ -1,7 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // better-sqlite3 is a native module; keep it external to the server bundle.
-  serverExternalPackages: ["better-sqlite3"],
+  // Native / heavy modules kept external to the server bundle: better-sqlite3
+  // (native addon) and the in-process embedding model (onnxruntime backend).
+  serverExternalPackages: ["better-sqlite3", "@xenova/transformers"],
   // Pin the workspace root so Turbopack ignores lockfiles further up the tree.
   turbopack: { root: import.meta.dirname },
   // The chat route reads ./data/titans.db via an fs path at runtime, which Next's
