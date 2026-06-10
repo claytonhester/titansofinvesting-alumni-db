@@ -426,7 +426,12 @@ def _nested(node: object, key: str) -> object:
 
 
 def _clean(value: object) -> str:
-    return str(value).strip() if value is not None else ""
+    # Booleans are never a valid text field — on limited PDL plans a gated field
+    # comes back as `true` (a presence flag), and str(True) would leak "True" into
+    # a claim (e.g. location='True'). Treat bool (and None) as absent.
+    if value is None or isinstance(value, bool):
+        return ""
+    return str(value).strip()
 
 
 def _as_int(value: object) -> int:
