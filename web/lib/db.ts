@@ -119,6 +119,48 @@ export interface DirectoryStats {
   enriched: number;
   claims: number;
   sources: number;
+  /** Avg 0-100 profile-quality score over enriched people (0 = not computed). */
+  completenessAvg: number;
+  /** Enriched people scoring below 60 — the refresh-candidate count. */
+  completenessLow: number;
+  /** Identity sources awaiting a human verdict (decision='review'). */
+  reviewQueue: number;
+}
+
+/** Profile-quality metrics live in pipeline-written tables that may predate
+ *  this feature in an older DB snapshot — degrade to zeros, never throw. */
+function profileQualityStats(): Pick<
+  DirectoryStats,
+  "completenessAvg" | "completenessLow" | "reviewQueue"
+> {
+  let completenessAvg = 0;
+  let completenessLow = 0;
+  let reviewQueue = 0;
+  try {
+    const row = db()
+      .prepare(
+        `SELECT ROUND(AVG(completeness_score)) AS avg,
+                SUM(CASE WHEN completeness_score < 60 THEN 1 ELSE 0 END) AS low
+         FROM person_insights pi
+         WHERE EXISTS (SELECT 1 FROM claims c WHERE c.person_id = pi.person_id)`
+      )
+      .get() as { avg: number | null; low: number | null };
+    completenessAvg = row.avg ?? 0;
+    completenessLow = row.low ?? 0;
+  } catch {
+    /* person_insights or the column missing in this snapshot */
+  }
+  try {
+    const row = db()
+      .prepare(
+        `SELECT COUNT(*) AS n FROM identity_candidates WHERE decision = 'review'`
+      )
+      .get() as { n: number };
+    reviewQueue = row.n;
+  } catch {
+    /* identity_candidates missing in this snapshot */
+  }
+  return { completenessAvg, completenessLow, reviewQueue };
 }
 
 export function directoryStats(): DirectoryStats {
@@ -130,7 +172,10 @@ export function directoryStats(): DirectoryStats {
               COUNT(DISTINCT CASE WHEN city <> '(unknown)' THEN city END) AS cities
        FROM people`
     )
-    .get() as Omit<DirectoryStats, "enriched" | "claims" | "sources">;
+    .get() as Omit<
+      DirectoryStats,
+      "enriched" | "claims" | "sources" | "completenessAvg" | "completenessLow" | "reviewQueue"
+    >;
   const enr = db()
     .prepare(
       `SELECT COUNT(DISTINCT person_id) AS enriched, COUNT(*) AS claims FROM claims`
@@ -139,7 +184,7 @@ export function directoryStats(): DirectoryStats {
   const src = db()
     .prepare(`SELECT COUNT(*) AS sources FROM person_sources`)
     .get() as { sources: number };
-  return { ...base, ...enr, ...src };
+  return { ...base, ...enr, ...src, ...profileQualityStats() };
 }
 
 export interface SchoolBreakdown {

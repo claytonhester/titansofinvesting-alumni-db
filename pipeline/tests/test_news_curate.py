@@ -373,6 +373,36 @@ def test_news_items_without_name_keeps_name_only_titles():
     assert len(news_items(claims)) == 1
 
 
+def test_news_items_drops_broker_echo_news_mentions():
+    """Regression (Ricardo Lopez / wwana.com): a broker/SEO-echo directory page that
+    arrives as a news_mention claim — not just a public_link — must never reach the
+    curator. Only public_links were host-gated before, so a wwana.com claim became
+    a curated row even though the identity gate had rejected the same host."""
+    claims = [
+        _mention("2026-06-01 — Ricardo Lopez — Notable Alumni", "echo",
+                 url="https://www.wwana.com/profile/ricardo-lopez"),
+        _mention("2026-06-01 — Highest paid employees", "salary row",
+                 url="https://govsalaries.com/x"),
+        _mention("2026-06-02 — Ricardo Lopez Named CIO of the Year", "real",
+                 url="https://www.barrons.com/x"),
+    ]
+    items = news_items(claims)
+    assert len(items) == 1
+    assert items[0].source_url == "https://www.barrons.com/x"
+
+
+def test_curate_never_curates_broker_echo_even_if_model_would_approve():
+    """End-to-end guard: a broker/echo news_mention yields NO curated row (and no
+    model spend) regardless of any editor verdict."""
+    mentions = [_mention("2026-06-01 — Ricardo Lopez Recognized", "echo",
+                         url="https://wwana.com/profile/ricardo-lopez")]
+    approving = _client(
+        '[{"index":0,"subject_depth":"feature","category":"Recognition",'
+        '"summary":"s","importance":0.9}]'
+    )
+    assert curate_news(approving, "Ricardo Lopez", "Apex", mentions) == ([], 0, 0)
+
+
 def test_news_items_drops_boilerplate_titles():
     """Firm/profile boilerplate is never news, even on a content host."""
     claims = [

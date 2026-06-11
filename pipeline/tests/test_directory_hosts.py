@@ -9,9 +9,11 @@ import pytest
 
 from directory_hosts import (
     DIRECTORY_HOSTS,
+    NON_NEWS_HOSTS,
     PUBLIC_RECORDS_HOSTS,
     SOCIAL_HOSTS,
     full_host,
+    is_non_news_host,
     is_untrusted_identity_host,
     registrable_host,
 )
@@ -47,6 +49,36 @@ def test_untrusted_identity_matches_bare_domains_subdomains_and_set_subdomains()
     assert is_untrusted_identity_host("https://signal.nfx.com/x")       # set sub-domain
     assert is_untrusted_identity_host("https://advisor.investedbetter.com/x")
     assert not is_untrusted_identity_host("https://acme.com/team")      # real firm
+
+
+@pytest.mark.unit
+def test_non_news_host_blocks_brokers_and_records_with_subdomains() -> None:
+    """Regression (Ricardo Lopez / wwana.com): broker/SEO-echo directories and
+    public-records hosts are never news, on bare domains and sub-domains alike."""
+    assert is_non_news_host("https://wwana.com/profile/ricardo-lopez")
+    assert is_non_news_host("https://www.wwana.com/profile/ricardo-lopez")
+    assert is_non_news_host("https://profiles.zoominfo.com/p/x")   # broker sub-domain
+    assert is_non_news_host("https://govsalaries.com/x")           # public records
+    assert not is_non_news_host("https://www.barrons.com/articles/x")  # real press
+    assert not is_non_news_host("")
+
+
+@pytest.mark.unit
+def test_non_news_core_covers_directories_and_records() -> None:
+    assert NON_NEWS_HOSTS == DIRECTORY_HOSTS | PUBLIC_RECORDS_HOSTS
+    assert "wwana.com" in NON_NEWS_HOSTS
+
+
+@pytest.mark.unit
+def test_news_score_aggregator_set_extends_the_shared_core() -> None:
+    # Drift guard: the Sonar news gate (is_aggregator_domain) must know every
+    # shared broker/records host. news_score once kept its own copy, and a
+    # wwana.com SEO-echo page became a news_mention claim + curated row even
+    # though the identity gate had rejected the same host.
+    from news_score import _AGGREGATOR_DOMAINS, is_aggregator_domain
+
+    assert NON_NEWS_HOSTS <= _AGGREGATOR_DOMAINS
+    assert is_aggregator_domain("https://www.wwana.com/profile/ricardo-lopez")
 
 
 @pytest.mark.unit

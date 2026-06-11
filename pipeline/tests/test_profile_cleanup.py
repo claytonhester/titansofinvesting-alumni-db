@@ -104,3 +104,37 @@ def test_clean_profile_composes_all_three():
     assert [c.value for c in out if c.claim_type == "current_employer"] == ["Sonar"]
     assert not any(c.claim_type == "current_title" for c in out)  # "Sonar" == employer
     assert not any("Titans of Investing" in c.value for c in out)
+
+
+# --- never-news host choke point ----------------------------------------------
+
+def test_drops_news_mention_from_broker_echo_host():
+    """Regression: a wwana.com scraper page became a news_mention claim for
+    Ricardo Lopez via a discovery path that forgot to filter. clean_profile is
+    the final choke point — broker/records hosts never survive to persistence."""
+    wwana = ClaimRow(
+        "news_mention",
+        "Ricardo Lopez Profile - Worldwide Association of Notable Alumni",
+        "https://www.wwana.com/home/4831484-ricardo-lopez/profile?skxiu=4831484",
+        "", 0.6, "sonar_press",
+    )
+    salary = ClaimRow(
+        "news_mention", "Jane Doe salary record",
+        "https://govsalaries.com/jane-doe", "", 0.6, "firecrawl_news",
+    )
+    real = ClaimRow(
+        "news_mention", "2024-01-01 — Acme names Jane Doe CEO",
+        "https://www.bizjournals.com/acme-ceo", "", 0.6, "firecrawl_news",
+    )
+    out = clean_profile([wwana, salary, real])
+    mentions = [c for c in out if c.claim_type == "news_mention"]
+    assert mentions == [real]
+
+
+def test_non_news_host_only_affects_news_mentions():
+    """A public_links claim to a directory host is the identity gate's business,
+    not this filter's — only news_mention claims are dropped here."""
+    link = ClaimRow(
+        "public_links", "Profile", "https://www.zoominfo.com/p/jane", "", 0.5, "pdl",
+    )
+    assert link in clean_profile([link])

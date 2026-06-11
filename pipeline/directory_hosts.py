@@ -51,6 +51,15 @@ SOCIAL_HOSTS: frozenset[str] = frozenset(
 # the query) and social networks (a namesake's handle matches just as well).
 UNTRUSTED_IDENTITY_HOSTS: frozenset[str] = DIRECTORY_HOSTS | SOCIAL_HOSTS
 
+# Hosts that can NEVER be editorial news, whatever a discovery source vouches.
+# Broker/SEO-echo directories (wwana.com et al.) parrot the queried name, so a
+# "press hit" there is a scraped listing about nobody in particular; public-records
+# salary lookups are disclosures, not stories. Enforced in the Sonar news path
+# (news_score.is_aggregator_domain) and the curator (news_curate.news_items) so
+# these domains can't become news_mention claims or news_curated rows — the
+# wwana.com / Ricardo Lopez echo got through when only the identity gate knew them.
+NON_NEWS_HOSTS: frozenset[str] = DIRECTORY_HOSTS | PUBLIC_RECORDS_HOSTS
+
 
 def full_host(url_or_host: str) -> str:
     """Full host of a URL: scheme/path/`www.` stripped, lowercased, but ALL
@@ -91,3 +100,14 @@ def is_untrusted_identity_host(url: str) -> bool:
     if not host:
         return False
     return host in UNTRUSTED_IDENTITY_HOSTS or registrable_host(host) in UNTRUSTED_IDENTITY_HOSTS
+
+
+def is_non_news_host(url: str) -> bool:
+    """True when a URL's host is a broker/SEO-echo directory or public-records
+    site that must never surface as news (claim or curated row). Same dual
+    full-host + registrable-domain test as the identity check, for the same
+    reason: the set mixes bare domains and broker sub-domains."""
+    host = full_host(url)
+    if not host:
+        return False
+    return host in NON_NEWS_HOSTS or registrable_host(host) in NON_NEWS_HOSTS

@@ -31,6 +31,7 @@ from dataclasses import dataclass
 
 from anthropic import Anthropic
 
+from career_analysis import parse_career_entry
 from enrichment_store import ClaimRow
 from normalize import smart_title
 from structuring import HAIKU_MODEL
@@ -216,6 +217,55 @@ def _parse_decisions(text: str, n: int) -> list[_Decision]:
     return decisions
 
 
+def _career_years(claim: ClaimRow) -> tuple[int | None, int | None]:
+    """(start_year, end_year) of a career claim, via the shared parser. An
+    open-ended entry ('2018-present') parses with end_year=None but start set."""
+    entry = parse_career_entry(claim.value, claim.quote or "")
+    return entry.start_year, entry.end_year
+
+
+def _dated_rank(claim: ClaimRow) -> tuple[int, int, int]:
+    """Sort key for 'the most authoritative dated variant': dated beats undated,
+    open-ended (current) beats closed, then the most recent year, then the more
+    complete (longer) value. Higher is better."""
+    start, end = _career_years(claim)
+    dated = 1 if (start is not None or end is not None) else 0
+    current = 1 if (start is not None and end is None) else 0
+    recency = end if end is not None else (start or 0)
+    return (dated, current * 10_000 + recency, len(claim.value or ""))
+
+
+def _tiebreak_career(
+    d: _Decision, resume: list[ClaimRow], absorbed: list[int]
+) -> tuple[str, int]:
+    """Deterministic 'dated, recent, complete wins' rule for career groups.
+
+    The model's prompt allows combining a title from one member with dates from
+    another, but in practice it sometimes crowns an undated phrasing — which is
+    how refreshed LinkedIn dates got lost behind stale web text (the Bart Howe
+    case). When the canonical value is undated and an absorbed member carries a
+    year range, that member's verbatim value (and provenance) wins instead.
+    Never invents: the substituted value is a member's own text.
+
+    Returns (canonical_value, primary_index)."""
+    best = max(absorbed, key=lambda m: _dated_rank(resume[m]))
+    best_start, best_end = _career_years(resume[best])
+    best_is_dated = best_start is not None or best_end is not None
+
+    canon_probe = ClaimRow(d.claim_type, d.value, "", "", 0.0, "")
+    canon_start, canon_end = _career_years(canon_probe)
+    canon_is_dated = canon_start is not None or canon_end is not None
+
+    primary = d.primary if d.primary in absorbed else absorbed[0]
+    if not canon_is_dated and best_is_dated:
+        return resume[best].value, best
+    if best_is_dated:
+        # Canonical keeps the dates; route provenance to the dated member so the
+        # claim's source/quote actually attest the date range it displays.
+        return d.value, best
+    return d.value, primary
+
+
 def _apply(resume: list[ClaimRow], decisions: list[_Decision]) -> list[ClaimRow]:
     """Build reconciled ClaimRows from decisions, preserving each group's primary
     provenance and re-casing the canonical value. Any résumé claim not covered by
@@ -248,7 +298,13 @@ def _apply(resume: list[ClaimRow], decisions: list[_Decision]) -> list[ClaimRow]
             covered.update(d.members)
             continue
 
-        primary = resume[d.primary] if d.primary in absorbed else resume[absorbed[0]]
+        canon_value = d.value
+        if (d.claim_type == "career_history" or
+                resume[absorbed[0]].claim_type == "career_history") and len(absorbed) > 1:
+            canon_value, primary_idx = _tiebreak_career(d, resume, absorbed)
+            primary = resume[primary_idx]
+        else:
+            primary = resume[d.primary] if d.primary in absorbed else resume[absorbed[0]]
         claim_type = d.claim_type if d.claim_type in _RECONCILE_TYPES else primary.claim_type
         merged = len(absorbed) > 1
         if merged:
@@ -261,7 +317,7 @@ def _apply(resume: list[ClaimRow], decisions: list[_Decision]) -> list[ClaimRow]
         rows.append(
             ClaimRow(
                 claim_type=claim_type,
-                value=smart_title(d.value) if claim_type != "short_bio" else d.value,
+                value=smart_title(canon_value) if claim_type != "short_bio" else canon_value,
                 source_url=primary.source_url,
                 quote=primary.quote,
                 confidence=primary.confidence,

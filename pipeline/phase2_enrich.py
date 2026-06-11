@@ -42,9 +42,16 @@ from normalize import digest_claims
 from profile_cleanup import clean_profile
 from linkedin_firecrawl import (
     LinkedInBudget,
+    LinkedInDecision,
     _current_role_start_year_from_claims,
     agent_batch_budget,
     fetch_linkedin,
+)
+from linkedin_verify import verify_linkedin_profile
+from research_policy import (
+    ResearchPolicy,
+    bypass_linkedin_gap_gate,
+    force_deep_path,
 )
 from pdl_enrich import PdlAttributes, PdlUnavailable, enrich_pdl
 from pdl_verify import verify_pdl_claims
@@ -91,6 +98,7 @@ from enrichment_store import (
     replace_candidates,
     replace_claims,
     replace_sources,
+    upsert_candidate,
 )
 from identity import (
     IdentityVerdict,
@@ -272,6 +280,103 @@ def _claim_from_field(claim_type: str, field: dict) -> ClaimRow | None:
     )
 
 
+@dataclass(frozen=True)
+class _LinkedInPass:
+    """Outcome of one agent fetch + verifier judgment."""
+    claim_rows: tuple[ClaimRow, ...]  # EMPTY unless the verifier said verified
+    verified_employer: str
+    credits: int
+    verify_in: int
+    verify_out: int
+    attempted: bool
+
+
+_LI_NOT_ATTEMPTED = _LinkedInPass((), "", 0, 0, 0, False)
+
+
+def _linkedin_pass(
+    conn: sqlite3.Connection,
+    firecrawl: Firecrawl,
+    anthropic: Anthropic,
+    person: Person,
+    *,
+    employer_hint: str,
+    claim_rows: list[ClaimRow],
+    trusted_count: int,
+    li_budget: LinkedInBudget,
+    fc_budget: FirecrawlBudget,
+    policy: ResearchPolicy,
+    role_start: int | None,
+) -> _LinkedInPass:
+    """Gated LinkedIn agent fetch + the fail-closed roster verifier.
+
+    Every agent result is judged against the roster anchors before ANY of its
+    claims join the pool (closing the old hole where agent output was extended
+    in unverified), and the verdict is persisted to identity_candidates.
+    Under REFRESH the gap-gate and min-source criteria are bypassed — the
+    verifier IS the namesake protection — but both budgets still bind."""
+    if bypass_linkedin_gap_gate(policy):
+        decision = (
+            LinkedInDecision(True, "refresh policy")
+            if li_budget.remaining > 0
+            else LinkedInDecision(False, "batch LinkedIn budget spent")
+        )
+    else:
+        decision = li_budget.decide(
+            claim_rows, trusted_count,
+            grad_year=grad_year_from_class(person.school, person.titan_class),
+            current_role_start_year=role_start,
+        )
+    if not fc_budget.decide().fire:
+        print("  Firecrawl LinkedIn: skipped (deep-path budget spent)")
+        return _LI_NOT_ATTEMPTED
+    if not decision.fire:
+        print(f"  Firecrawl LinkedIn: skipped ({decision.reason})")
+        return _LI_NOT_ATTEMPTED
+
+    try:
+        li = fetch_linkedin(
+            firecrawl, person.full_name, employer=employer_hint, city=person.city
+        )
+    except PaymentRequiredError:
+        print("  Firecrawl LinkedIn: no credits — skipped")
+        return _LI_NOT_ATTEMPTED
+    li_budget.charge(li.credits_used)
+    fc_budget.charge(li.credits_used)
+    if not li.found or not li.claim_rows:
+        print(f"  Firecrawl LinkedIn: not found ({li.credits_used} credits)")
+        return _LinkedInPass((), "", li.credits_used, 0, 0, True)
+
+    url = next((c.source_url for c in li.claim_rows if c.source_url), "")
+    verdict, vin, vout = verify_linkedin_profile(
+        anthropic, person.full_name,
+        profile_url=url,
+        school=person.school,
+        grad_year=grad_year_from_class(person.school, person.titan_class),
+        roster_employer=person.company,
+        city=person.city,
+        claims=list(li.claim_rows),
+    )
+    upsert_candidate(conn, person.id, CandidateRow(
+        source_url=url or f"linkedin-agent:{person.full_name}",
+        confidence=verdict.confidence,
+        decision=verdict.decision,
+        reason=verdict.reason or "linkedin-agent profile verdict",
+        model=HAIKU_MODEL,
+    ))
+    if not verdict.verified:
+        print(f"  Firecrawl LinkedIn: {verdict.decision} — {verdict.reason} "
+              f"({li.credits_used} credits)")
+        return _LinkedInPass((), "", li.credits_used, vin, vout, True)
+
+    employer = next(
+        (c.value for c in li.claim_rows if c.claim_type == "current_employer"), ""
+    )
+    print(f"  Firecrawl LinkedIn: verified ({verdict.confidence:.2f}) — "
+          f"{len(li.claim_rows)} claims ({li.credits_used} credits)")
+    return _LinkedInPass(li.claim_rows, employer, li.credits_used, vin, vout, True)
+
+
 def enrich_person(
     conn: sqlite3.Connection,
     firecrawl: Firecrawl,
@@ -283,7 +388,7 @@ def enrich_person(
     *,
     li_budget: LinkedInBudget | None = None,
     fc_budget: FirecrawlBudget | None = None,
-    force_deep: bool = False,
+    policy: ResearchPolicy = ResearchPolicy.BULK,
 ) -> _PersonUsage:
     """Run the full pipeline for one person and persist every stage. Records
     batch_status per phase so a crash mid-batch resumes cleanly. Returns the
@@ -326,16 +431,42 @@ def enrich_person(
     _verified_employer = (struct.profile.get("current_employer") or {}).get("value", "")
     _verified_title = (struct.profile.get("current_title") or {}).get("value", "")
 
+    # === LINKEDIN-FIRST PASS (verified agent, before PDL) ===
+    # When the policy or the PDL-independent signal warrants the deep path, the
+    # LinkedIn agent runs FIRST: its verified current employer is the best
+    # possible PDL anchor (the roster company is decades stale for older
+    # classes; the web-verified employer is missing for exactly the thin
+    # profiles that need help). A profile must clear the fail-closed roster
+    # verifier before any of its claims are used.
+    li_pass = _LI_NOT_ATTEMPTED
+    pre_deep = force_deep_path(policy) or is_high_signal(
+        pdl_matched=False,
+        trusted_count=len(trusted),
+        has_current_employer=bool(_verified_employer),
+    )
+    if pre_deep:
+        li_pass = _linkedin_pass(
+            conn, firecrawl, anthropic, person,
+            employer_hint=_verified_employer or person.company,
+            claim_rows=claim_rows,
+            trusted_count=len(trusted),
+            li_budget=li_budget,
+            fc_budget=fc_budget,
+            policy=policy,
+            role_start=_current_role_start_year_from_claims(claim_rows),
+        )
+        if li_pass.claim_rows:
+            claim_rows.extend(li_pass.claim_rows)
+
     # PDL deepens the verified résumé (canonical claim_types, identity-gated on
     # likelihood). Skips cleanly when its key is unset and never raises, so a
     # missing key or an outage degrades enrichment instead of aborting it.
     #
-    # Anchor on the VERIFIED current employer when we have one, not the roster's
-    # initial_company — for an older class the roster company is ~15-20 years stale
-    # and matches PDL's current record poorly (the likely cause of low match rate).
-    # Falls back to the roster company for thin/empty profiles where structuring
-    # produced no employer.
-    pdl_company = _verified_employer or person.company
+    # Anchor preference: the LinkedIn-verified current employer (freshest),
+    # then the web-verified one, then the roster company — for an older class
+    # the roster company is ~15-20 years stale and matches PDL's current
+    # record poorly (the likely cause of low match rate).
+    pdl_company = li_pass.verified_employer or _verified_employer or person.company
     pdl = (
         enrich_pdl(
             http,
@@ -356,6 +487,7 @@ def enrich_person(
     # through. Conservative — drops only clear inconsistencies, never raises.
     pdl_pv_in = pdl_pv_out = 0
     pdl_dropped = 0
+    pdl_usd_total = pdl.cost_usd if pdl else 0.0  # accumulates across the warm retry
     if pdl is not None and pdl.claim_rows:
         n_before = len(pdl.claim_rows)
         kept_pdl, pdl_pv_in, pdl_pv_out = verify_pdl_claims(
@@ -376,11 +508,10 @@ def enrich_person(
     #   2. the LinkedIn agent (its own gap-filling triple-gate; biggest line item),
     #   3. the press/news pass.
     pdl_matched = bool(pdl and pdl.matched)
-    # --force-deep: operator override for a targeted re-research pass. The signal
-    # gate exists to avoid spending Firecrawl on no-footprint people in bulk runs,
-    # but a deep pass targets exactly those people on purpose — the operator has
-    # already decided they warrant the spend (still bounded by fc/li budgets).
-    deep = force_deep or is_high_signal(
+    # Policy override (DEEP/REFRESH): a targeted re-research pass spends on
+    # exactly the no-footprint people the signal gate would skip — the operator
+    # has already decided they warrant it (still bounded by fc/li budgets).
+    deep = force_deep_path(policy) or is_high_signal(
         pdl_matched=pdl_matched,
         trusted_count=len(trusted),
         has_current_employer=bool(_verified_employer),
@@ -432,41 +563,56 @@ def enrich_person(
                 + _candidate_rows(dident.verdicts, "sonnet"),
             )
 
-        # 2. LinkedIn agent — gap-filling, billed, its own triple-gate (thin profile
-        #    + verified presence + agent budget). Charges BOTH its own ceiling and the
-        #    deep Firecrawl budget.
-        _li_grad_year = grad_year_from_class(person.school, person.titan_class)
-        _li_role_start = (
-            pdl.attributes.current_role_start_year
-            if pdl is not None
-            else _current_role_start_year_from_claims(claim_rows)
-        )
-        decision = li_budget.decide(
-            claim_rows, len(trusted),
-            grad_year=_li_grad_year, current_role_start_year=_li_role_start,
-        )
-        if not fc_budget.decide().fire:
-            # The deep Firecrawl ceiling (--max-credits) is a HARD cap on ALL deep
-            # Firecrawl, including the LinkedIn agent — the biggest spender. Without
-            # this check LinkedIn would be bounded only by li_budget and could
-            # overshoot the operator's --max-credits.
-            print("  Firecrawl LinkedIn: skipped (deep-path budget spent)")
-        elif not decision.fire:
-            print(f"  Firecrawl LinkedIn: skipped ({decision.reason})")
-        else:
-            try:
-                li = fetch_linkedin(
-                    firecrawl, person.full_name,
-                    employer=_verified_employer or person.company, city=person.city,
+        # 2. LinkedIn agent fallback — only when the pre-PDL pass didn't attempt
+        #    it (a person whose deep signal arrived WITH the PDL match). Same
+        #    verified path; charges both ceilings inside the helper.
+        if not li_pass.attempted:
+            _li_role_start = (
+                pdl.attributes.current_role_start_year
+                if pdl is not None
+                else _current_role_start_year_from_claims(claim_rows)
+            )
+            li_pass = _linkedin_pass(
+                conn, firecrawl, anthropic, person,
+                employer_hint=_verified_employer or person.company,
+                claim_rows=claim_rows,
+                trusted_count=len(trusted),
+                li_budget=li_budget,
+                fc_budget=fc_budget,
+                policy=policy,
+                role_start=_li_role_start,
+            )
+            if li_pass.claim_rows:
+                claim_rows.extend(li_pass.claim_rows)
+
+        # 2b. PDL warm-anchor retry: the first PDL attempt missed, but a VERIFIED
+        #     LinkedIn employer has since arrived and differs from the anchor we
+        #     used — one more try. A PDL miss is free (404s don't bill), so the
+        #     retry only costs money when it succeeds, which is the point.
+        if (
+            pdl is not None and not pdl.matched
+            and li_pass.verified_employer
+            and li_pass.verified_employer != pdl_company
+            and pdl_key
+        ):
+            print(f"  PDL warm retry: anchor '{li_pass.verified_employer}'")
+            pdl = enrich_pdl(
+                http, pdl_key, person.full_name,
+                li_pass.verified_employer, person.city,
+                school=person.school,
+                cost_usd_per_match=PDL_USD_PER_MATCH,
+            )
+            pdl_usd_total += pdl.cost_usd
+            if pdl.claim_rows:
+                kept_pdl, _rin, _rout = verify_pdl_claims(
+                    anthropic, person.full_name,
+                    li_pass.verified_employer, person.city,
+                    list(pdl.claim_rows),
                 )
-                li_credits = li.credits_used
-                li_budget.charge(li_credits)
-                fc_budget.charge(li_credits)
-                n_li = len(li.claim_rows)
-                if li.claim_rows:
-                    claim_rows.extend(li.claim_rows)
-            except PaymentRequiredError:
-                print("  Firecrawl LinkedIn: no credits — skipped")
+                pdl_pv_in += _rin
+                pdl_pv_out += _rout
+                claim_rows.extend(kept_pdl)
+            pdl_matched = bool(pdl.matched)
 
         # 3. Firecrawl + Claude press/news pass (verified employer/title queries).
         if fc_budget.decide().fire:
@@ -488,6 +634,12 @@ def enrich_person(
                 claim_rows.extend(fc_news.claim_rows)
             fc_news_in, fc_news_out = fc_news.input_tokens, fc_news.output_tokens
             n_fc_news = len(fc_news.claim_rows)
+
+    # LinkedIn accounting covers BOTH call sites (pre-PDL and the deep fallback) —
+    # li_pass always holds the single attempt that ran (the helper is called at
+    # most once per person).
+    li_credits = li_pass.credits
+    n_li = len(li_pass.claim_rows)
 
     # Compose a short_bio from the verified facts when no source handed us a
     # ready-made narrative. Built from the FULL résumé set (baseline + PDL + any deep
@@ -710,6 +862,7 @@ def enrich_person(
             + fc_news_in
             + rec_in
             + pdl_pv_in
+            + li_pass.verify_in
             + kpi_in
             + news_in
         ),
@@ -720,13 +873,14 @@ def enrich_person(
             + fc_news_out
             + rec_out
             + pdl_pv_out
+            + li_pass.verify_out
             + kpi_out
             + news_out
         ),
         sonnet_in=identity.input_tokens + deep_sonnet_in,
         sonnet_out=identity.output_tokens + deep_sonnet_out,
         pdl_matches=1 if pdl_matched else 0,
-        pdl_usd=pdl.cost_usd if pdl else 0.0,
+        pdl_usd=pdl_usd_total,
         fc_news_credits=fc_news_credits,
         fc_news_articles=n_fc_news,
         perplexity_requests=mentions.perplexity_requests,
@@ -743,7 +897,7 @@ def run(
     max_credits: int | None = None,
     ids: list[int] | None = None,
     no_pdl: bool = False,
-    force_deep: bool = False,
+    policy: ResearchPolicy = ResearchPolicy.BULK,
 ) -> int:
     firecrawl = Firecrawl(api_key=require_key("FIRECRAWL_API_KEY"))
     anthropic = Anthropic(api_key=require_key("ANTHROPIC_API_KEY"))
@@ -798,7 +952,7 @@ def run(
                 try:
                     usage = enrich_person(
                         conn, firecrawl, anthropic, person, http, pdl_key, perplexity_key,
-                        li_budget=li_budget, fc_budget=fc_budget, force_deep=force_deep,
+                        li_budget=li_budget, fc_budget=fc_budget, policy=policy,
                     )
                     conn.commit()  # persist each person before moving on (resumable)
                     est_credits += usage.credits + usage.fc_news_credits
@@ -903,9 +1057,13 @@ def build_parser() -> argparse.ArgumentParser:
                         "Bypasses the done-check: targets are rebuilt in place")
     p.add_argument("--no-pdl", dest="no_pdl", action="store_true",
                    help="Hard-disable PDL for this run (preserve the monthly quota)")
+    p.add_argument("--policy", default=None,
+                   choices=[pol.value for pol in ResearchPolicy],
+                   help="Research policy: bulk (all gates), deep (force the deep "
+                        "Firecrawl path), refresh (deep + LinkedIn agent fires even "
+                        "for complete-looking profiles)")
     p.add_argument("--force-deep", dest="force_deep", action="store_true",
-                   help="Override the high-signal gate: run the deep Firecrawl path "
-                        "(career scrape / LinkedIn agent / news) for every target")
+                   help="DEPRECATED alias for --policy deep")
     return p
 
 
@@ -923,10 +1081,17 @@ def _parse_ids(raw: str | None) -> list[int] | None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.policy is not None:
+        policy = ResearchPolicy.parse(args.policy)
+    elif args.force_deep:
+        print("--force-deep is deprecated; use --policy deep", file=sys.stderr)
+        policy = ResearchPolicy.DEEP
+    else:
+        policy = ResearchPolicy.BULK
     return run(limit=args.limit, name=args.name,
                titan_class=args.titan_class, school=args.school,
                max_credits=args.max_credits, ids=_parse_ids(args.ids),
-               no_pdl=args.no_pdl, force_deep=args.force_deep)
+               no_pdl=args.no_pdl, policy=policy)
 
 
 if __name__ == "__main__":

@@ -163,6 +163,23 @@ export default async function Home({
                 ))}
               </div>
             </div>
+            <div className="panel col-12">
+              <h3>Profile quality</h3>
+              <div className="stat-row">
+                <div className="stat-cell">
+                  <div className="n">{stats.completenessAvg}</div>
+                  <div className="l">Avg completeness (0–100)</div>
+                </div>
+                <div className="stat-cell">
+                  <div className="n">{stats.completenessLow}</div>
+                  <div className="l">Below 60 — refresh candidates</div>
+                </div>
+                <div className="stat-cell">
+                  <div className="n">{stats.reviewQueue}</div>
+                  <div className="l">Identity sources awaiting review</div>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
             ),

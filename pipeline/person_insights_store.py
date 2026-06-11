@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS person_insights (
     current_sector      TEXT,
     first_sector        TEXT,              -- sector of the FIRST employer (Origins)
     left_texas          INTEGER,           -- 1 / 0 / NULL (unknown)
+    -- Profile-quality score (0-100), owned by compute_completeness.py: written
+    -- by its UPDATE during finalize, deliberately NOT part of the enrichment
+    -- upsert so a re-enrich can't zero it before the next finalize recomputes.
+    completeness_score  INTEGER NOT NULL DEFAULT 0,
     employer_domain     TEXT    NOT NULL DEFAULT '',  -- join key to companies(domain)
     model             TEXT    NOT NULL DEFAULT '',
     classified_at    TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -91,6 +95,8 @@ class PersonInsight:
     left_texas: bool | None = None
     employer_domain: str = ""
     model: str = ""
+    # Read-only here: written by compute_completeness.py, not the upsert.
+    completeness_score: int = 0
 
 
 def _ensure_columns(conn: sqlite3.Connection) -> None:
@@ -102,6 +108,7 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         "job_sub_function": "TEXT",
         "employer_domain": "TEXT NOT NULL DEFAULT ''",
         "first_sector": "TEXT",
+        "completeness_score": "INTEGER NOT NULL DEFAULT 0",
     }
     for col, decl in additive.items():
         if col not in have:
@@ -220,6 +227,7 @@ def _to_insight(row: sqlite3.Row) -> PersonInsight:
         left_texas=None if lt is None else bool(lt),
         employer_domain=(row["employer_domain"] if "employer_domain" in row.keys() else "") or "",
         model=row["model"],
+        completeness_score=(row["completeness_score"] if "completeness_score" in row.keys() else 0) or 0,
     )
 
 

@@ -186,3 +186,75 @@ def test_build_user_numbers_every_claim():
     user = _build_user(resume)
     assert "[0] career_history | A" in user
     assert "[1] education | B" in user
+
+
+# --- dated/recent tiebreaker (career groups) -----------------------------------
+
+def _decision(ct, value, members, primary):
+    from reconcile import _Decision
+    return _Decision(ct, value, tuple(members), primary)
+
+
+def test_tiebreak_undated_canonical_upgraded_to_dated_member():
+    """The Bart Howe case: the model crowns a stale undated phrasing while a
+    member carries the full dated LinkedIn version — the dated value must win."""
+    resume = [
+        _claim("career_history", "Co-founder of Holland Course Capital",
+               src="https://theorg.com/x", method="firecrawl"),
+        _claim("career_history",
+               "Co-Founder & Managing Partner at Holland Course Capital (2017-present)",
+               src="https://linkedin.com/in/bart", method="firecrawl-linkedin"),
+    ]
+    out = _apply(resume, [_decision(
+        "career_history", "Co-founder of Holland Course Capital", [0, 1], 0)])
+    assert len(out) == 1
+    assert "(2017-Present)".lower() in out[0].value.lower()
+    assert out[0].source_url == "https://linkedin.com/in/bart"
+
+
+def test_tiebreak_prefers_most_recent_dated_member_provenance():
+    """When the canonical IS dated, provenance routes to the dated member that
+    attests it, not an undated aggregator page."""
+    resume = [
+        _claim("career_history", "EVP at Caris Life Sciences",
+               src="https://aggregator.com/x"),
+        _claim("career_history", "EVP at Caris Life Sciences (2014-2017)",
+               src="https://linkedin.com/in/bart", method="firecrawl-linkedin"),
+    ]
+    out = _apply(resume, [_decision(
+        "career_history", "EVP at Caris Life Sciences (2014-2017)", [0, 1], 0)])
+    assert len(out) == 1
+    assert out[0].source_url == "https://linkedin.com/in/bart"
+
+
+def test_tiebreak_open_ended_beats_closed_when_canonical_undated():
+    resume = [
+        _claim("career_history", "Director at Acme (2010-2014)", src="https://a.com"),
+        _claim("career_history", "Director at Acme (2014-present)", src="https://b.com"),
+        _claim("career_history", "Director at Acme", src="https://c.com"),
+    ]
+    out = _apply(resume, [_decision("career_history", "Director at Acme", [0, 1, 2], 2)])
+    assert len(out) == 1
+    assert "present" in out[0].value.lower()
+    assert out[0].source_url == "https://b.com"
+
+
+def test_tiebreak_all_undated_keeps_model_choice():
+    resume = [
+        _claim("career_history", "Analyst at Acme", src="https://a.com"),
+        _claim("career_history", "Acme Analyst", src="https://b.com"),
+    ]
+    out = _apply(resume, [_decision("career_history", "Analyst at Acme", [0, 1], 1)])
+    assert len(out) == 1
+    assert out[0].value == "Analyst at Acme"
+    assert out[0].source_url == "https://b.com"  # model's primary respected
+
+
+def test_tiebreak_only_touches_career_groups():
+    resume = [
+        _claim("current_employer", "Acme Capital", src="https://a.com"),
+        _claim("current_employer", "Acme Capital LLC", src="https://b.com"),
+    ]
+    out = _apply(resume, [_decision("current_employer", "Acme Capital", [0, 1], 0)])
+    assert len(out) == 1
+    assert out[0].source_url == "https://a.com"  # model's primary untouched

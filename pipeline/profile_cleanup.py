@@ -21,6 +21,7 @@ Every function is pure and never raises; an unparseable entry is left untouched.
 from __future__ import annotations
 
 from career_analysis import _norm_company, parse_career_entry
+from directory_hosts import is_non_news_host
 from enrichment_store import ClaimRow
 
 # Career entries whose company OR title contains one of these is a student
@@ -150,10 +151,24 @@ def clean_current_title(claims: list[ClaimRow]) -> list[ClaimRow]:
     ]
 
 
+def drop_non_news_mentions(claims: list[ClaimRow]) -> list[ClaimRow]:
+    """Drop news_mention claims sourced from broker/SEO-echo directories or
+    public-records hosts. Each discovery path is supposed to filter these at
+    claim creation, but every new path is a new chance to forget (the wwana.com
+    / Ricardo Lopez leak came through exactly such a gap) — this is the single
+    choke point right before persistence that holds regardless."""
+    return [
+        c for c in claims
+        if not (c.claim_type == "news_mention" and is_non_news_host(c.source_url))
+    ]
+
+
 def clean_profile(claims: list[ClaimRow]) -> list[ClaimRow]:
     """Run all deterministic cleanups in order: drop non-professional careers,
-    collapse to a single current role, then strip an employer-as-title. Pure."""
+    drop never-news mentions, collapse to a single current role, then strip an
+    employer-as-title. Pure."""
     out = drop_nonprofessional_careers(list(claims))
+    out = drop_non_news_mentions(out)
     out = dedupe_current_role(out)
     out = clean_current_title(out)
     return out

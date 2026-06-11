@@ -174,6 +174,32 @@ def replace_candidates(
     return len(rows)
 
 
+def upsert_candidate(
+    conn: sqlite3.Connection, person_id: int, candidate: CandidateRow
+) -> None:
+    """Insert or refresh ONE identity verdict without touching the person's
+    other candidates. replace_candidates() wipes the whole trail — correct for
+    a fresh discovery pass, destructive for a single added verdict (e.g. the
+    LinkedIn verifier judging one agent result on a refresh run)."""
+    conn.execute(
+        "INSERT INTO identity_candidates "
+        "(person_id, source_url, confidence, decision, reason, model) "
+        "VALUES (:person_id, :source_url, :confidence, :decision, :reason, :model) "
+        "ON CONFLICT (person_id, source_url) DO UPDATE SET "
+        "confidence = excluded.confidence, decision = excluded.decision, "
+        "reason = excluded.reason, model = excluded.model, "
+        "evaluated_at = datetime('now')",
+        {
+            "person_id": person_id,
+            "source_url": candidate.source_url,
+            "confidence": candidate.confidence,
+            "decision": candidate.decision,
+            "reason": candidate.reason,
+            "model": candidate.model,
+        },
+    )
+
+
 def replace_claims(
     conn: sqlite3.Connection, person_id: int, claims: Sequence[ClaimRow]
 ) -> int:

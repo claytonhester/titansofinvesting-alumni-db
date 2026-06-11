@@ -98,6 +98,26 @@ def test_aggregator_domain_dropped_even_if_vouched() -> None:
 
 
 @pytest.mark.unit
+def test_broker_echo_domain_dropped_even_if_vouched() -> None:
+    """Regression (Ricardo Lopez, person 779): wwana.com — an SEO scraper directory
+    the identity gate already rejected — slipped through Sonar as a news_mention
+    because the news path kept its own drifted domain list. Every broker/echo host
+    in directory_hosts.NON_NEWS_HOSTS must be dropped here, vouched or not."""
+    press = [{
+        "headline": "Ricardo Lopez — Worldwide Association of Notable Alumni",
+        "url": "https://www.wwana.com/profile/ricardo-lopez",
+        "date": "2026-06-01",
+        "why": "Directory page echoing the queried name.",
+        "is_about_this_person": True,
+    }]
+    result = discover_press_sonar(
+        _client(_ok(_body(press))), "Ricardo Lopez", "Apex", "Austin",
+        perplexity_key="key", facets=("x",),
+    )
+    assert result.found == 1 and result.kept == 0 and result.claim_rows == ()
+
+
+@pytest.mark.unit
 def test_undated_item_keeps_bare_headline() -> None:
     press = [{
         "headline": "Jane Doe on the macro outlook",
