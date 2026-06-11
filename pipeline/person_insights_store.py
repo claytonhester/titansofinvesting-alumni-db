@@ -109,6 +109,12 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         "employer_domain": "TEXT NOT NULL DEFAULT ''",
         "first_sector": "TEXT",
         "completeness_score": "INTEGER NOT NULL DEFAULT 0",
+        # Two-pass enrichment: the base sweep marks who needs a deep (Firecrawl)
+        # pass. Owned by compute_completeness.py (set/cleared by its UPDATE,
+        # like completeness_score) — deliberately NOT in the enrichment upsert,
+        # so a re-enrich can't clobber the flag before finalize recomputes it.
+        "needs_deep_search": "INTEGER NOT NULL DEFAULT 0",
+        "deep_search_reason": "TEXT NOT NULL DEFAULT ''",
     }
     for col, decl in additive.items():
         if col not in have:

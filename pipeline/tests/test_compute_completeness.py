@@ -95,6 +95,83 @@ def test_linkedin_detected_from_source_url_or_value():
     assert via_url.has_linkedin and via_value.has_linkedin
 
 
+def test_linkedin_detected_from_linkedin_url_claim_type():
+    """The search-resolver records a `linkedin_url`-typed claim, not public_links;
+    completeness must count it (else the recorded URL never clears the flag)."""
+    via_value = compute_breakdown(
+        [_c("linkedin_url", "https://linkedin.com/in/pmschweitzer", source_url="")]
+    )
+    via_url = compute_breakdown(
+        [_c("linkedin_url", "search-resolved",
+            source_url="https://www.linkedin.com/in/pmschweitzer")]
+    )
+    assert via_value.has_linkedin and via_url.has_linkedin
+
+
 def test_deterministic_idempotent():
     claims = _full_profile()
     assert compute_breakdown(claims) == compute_breakdown(claims)
+
+
+# --- DB-level flag lifecycle (thin -> flagged -> rich -> cleared) ----------------
+
+import sqlite3  # noqa: E402
+
+from compute_completeness import recompute_completeness  # noqa: E402
+from db import init_schema  # noqa: E402
+from enrichment_store import init_enrichment_schema, replace_claims  # noqa: E402
+from person_insights_store import (  # noqa: E402
+    PersonInsight,
+    init_person_insights_schema,
+    upsert_person_insight,
+)
+
+
+def _conn_with_person(pid=1):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_schema(conn)
+    init_enrichment_schema(conn)
+    init_person_insights_schema(conn)
+    conn.execute(
+        "INSERT INTO people (id, full_name, name_slug, titan_class, school, "
+        "initial_company, city, source_url, raw_entry) VALUES "
+        "(?, 'Thin Alice', 'thin-alice', 1, 'A&M', 'Acme', 'Austin', 'http://x', 'raw')",
+        (pid,),
+    )
+    upsert_person_insight(conn, PersonInsight(
+        person_id=pid, grad_year=2014, grad_year_source="class", first_employer="Acme",
+        on_buy_side=False, reached_md=False, founder_partner=False, still_first_firm=True,
+    ))
+    return conn
+
+
+def _flag(conn, pid=1):
+    row = conn.execute(
+        "SELECT needs_deep_search, deep_search_reason FROM person_insights "
+        "WHERE person_id=?", (pid,)).fetchone()
+    return row["needs_deep_search"], row["deep_search_reason"]
+
+
+def test_thin_profile_flagged_then_rich_clears():
+    conn = _conn_with_person()
+    # PASS 1: a thin base-sweep profile (current role only) -> flagged.
+    replace_claims(conn, 1, [
+        _c("current_employer", "Acme"), _c("current_title", "Analyst"),
+    ])
+    recompute_completeness(conn, 1)
+    flag, reason = _flag(conn)
+    assert flag == 1 and reason  # reason names what's missing
+
+    # PASS 2: deep pass added a full résumé -> flag self-clears.
+    replace_claims(conn, 1, _full_profile())
+    recompute_completeness(conn, 1)
+    flag, reason = _flag(conn)
+    assert flag == 0 and reason == ""
+
+
+def test_rich_profile_never_flagged():
+    conn = _conn_with_person()
+    replace_claims(conn, 1, _full_profile())
+    recompute_completeness(conn, 1)
+    assert _flag(conn) == (0, "")

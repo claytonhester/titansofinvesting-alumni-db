@@ -33,6 +33,7 @@ from pathlib import Path
 from career_analysis import parse_career_entry
 from config import DB_PATH
 from db import connect
+from deep_search_flag import should_flag_for_deep_search
 from directory_hosts import registrable_host
 from enrichment_store import ClaimRow
 from person_insights_store import init_person_insights_schema
@@ -96,9 +97,11 @@ def compute_breakdown(claims: list[ClaimRow]) -> CompletenessBreakdown:
         for c in by_type.get("short_bio", [])
     )
     has_press = bool(by_type.get("news_mention"))
+    # A LinkedIn URL can arrive as a public_links claim OR as the dedicated
+    # linkedin_url claim the search-resolver records — count either.
     has_linkedin = any(
         _is_linkedin_url(c.source_url) or _is_linkedin_url(c.value)
-        for c in by_type.get("public_links", [])
+        for c in by_type.get("public_links", []) + by_type.get("linkedin_url", [])
     )
     dated = sum(1 for c in career if _career_entry_dated(c))
     dated_share = (dated / len(career)) if career else 0.0
@@ -146,11 +149,13 @@ def _load_claims(conn: sqlite3.Connection, person_id: int) -> list[ClaimRow]:
 def recompute_completeness(
     conn: sqlite3.Connection, person_id: int
 ) -> CompletenessBreakdown:
-    """Compute + persist one person's score. Caller commits."""
+    """Compute + persist one person's score AND deep-search flag. Caller commits."""
     breakdown = compute_breakdown(_load_claims(conn, person_id))
+    needs_deep, reason = should_flag_for_deep_search(breakdown)
     conn.execute(
-        "UPDATE person_insights SET completeness_score = ? WHERE person_id = ?",
-        (breakdown.score, person_id),
+        "UPDATE person_insights SET completeness_score = ?, "
+        "needs_deep_search = ?, deep_search_reason = ? WHERE person_id = ?",
+        (breakdown.score, 1 if needs_deep else 0, reason, person_id),
     )
     return breakdown
 
@@ -166,18 +171,25 @@ def run(db_path: str, dry_run: bool) -> int:
 
         changed = 0
         low: list[tuple[int, str, int]] = []
+        flagged: list[tuple[int, str, int, str]] = []
         for row in people:
             breakdown = compute_breakdown(_load_claims(conn, row["person_id"]))
+            needs_deep, reason = should_flag_for_deep_search(breakdown)
             if breakdown.score != (row["completeness_score"] or 0):
                 changed += 1
-                if not dry_run:
-                    conn.execute(
-                        "UPDATE person_insights SET completeness_score = ? "
-                        "WHERE person_id = ?",
-                        (breakdown.score, row["person_id"]),
-                    )
+            # Always write score + flag: the flag is set AND cleared every run, so
+            # a profile that became rich in the deep pass clears itself here.
+            if not dry_run:
+                conn.execute(
+                    "UPDATE person_insights SET completeness_score = ?, "
+                    "needs_deep_search = ?, deep_search_reason = ? "
+                    "WHERE person_id = ?",
+                    (breakdown.score, 1 if needs_deep else 0, reason, row["person_id"]),
+                )
             if breakdown.score < 60:
                 low.append((row["person_id"], row["full_name"], breakdown.score))
+            if needs_deep:
+                flagged.append((row["person_id"], row["full_name"], breakdown.score, reason))
 
         if dry_run:
             conn.rollback()
@@ -190,6 +202,8 @@ def run(db_path: str, dry_run: bool) -> int:
         print(f"{len(low)} people below 60 (refresh candidates):")
         for pid, name, score in sorted(low, key=lambda t: t[2]):
             print(f"  [{pid:>4}] {score:>3}  {name}")
+    print(f"Deep-search queue: {len(flagged)}/{len(people)} flagged "
+          f"(needs_deep_search=1) — run `phase2_enrich.py --needs-deep`")
     return 0
 
 
