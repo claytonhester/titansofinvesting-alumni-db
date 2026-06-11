@@ -372,6 +372,7 @@ def _linkedin_pass(
     policy: ResearchPolicy,
     role_start: int | None,
     seed_url: str = "",
+    seed_overrides_gate: bool = True,
 ) -> _LinkedInPass:
     """Gated LinkedIn agent fetch + the fail-closed roster verifier.
 
@@ -383,10 +384,18 @@ def _linkedin_pass(
 
     `seed_url` is a known linkedin.com/in/ URL (from PDL or a verified mention):
     when present the agent READS that exact profile instead of blind-searching,
-    which is far more reliable. A seed is worth firing for even on an otherwise
-    complete profile (it corroborates), so it overrides the gap-gate — but never
-    the budgets, and the roster verifier still guards against a wrong URL."""
-    if seed_url:
+    which is far more reliable.
+
+    `seed_overrides_gate` controls whether holding a seed FORCES the read. The
+    head-to-head probe (2026-06-11) settled this: a seeded read lands only ~42%
+    of the time and, where PDL is already rich, ADDS LESS than PDL (Will: PDL 11
+    roles, LinkedIn 4 truncated) — so reading every seeded profile is wasteful.
+    Where PDL is THIN, the read is the whole résumé (Payal 0→16, Bart 0→10). So
+    the post-PDL caller passes False: the gap-gate (evaluated on the post-PDL
+    claim set) fires the read only when the profile is still thin, while STILL
+    reading the corrected seed URL when it does fire. The budgets and verifier
+    bind under every setting."""
+    if seed_url and seed_overrides_gate:
         decision = (
             LinkedInDecision(True, "seeded url")
             if li_budget.remaining > 0
@@ -683,6 +692,12 @@ def enrich_person(
                 policy=policy,
                 role_start=_li_role_start,
                 seed_url=li_seed_url,
+                # Targeted read: the corrected URL is read ONLY when the
+                # post-PDL profile is still thin (gap-gate decides). REFRESH
+                # still bypasses the gate inside the helper; under BULK/DEEP a
+                # rich PDL profile (e.g. Will Carpenter) is left to PDL and the
+                # ~189-credit read is spent only where PDL whiffed.
+                seed_overrides_gate=False,
             )
             li_credits_acc += li_pass.credits
             li_vin_acc += li_pass.verify_in

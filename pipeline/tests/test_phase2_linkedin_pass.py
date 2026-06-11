@@ -57,7 +57,8 @@ _COMPLETE_PROFILE = [
 
 
 def _call(monkeypatch, *, policy, claims, verdict="verified", li_budget=None,
-          fc_budget=None, found=True, seed_url="", capture=None):
+          fc_budget=None, found=True, seed_url="", capture=None,
+          seed_overrides_gate=True):
     def _fake_fetch(*a, **k):
         if capture is not None:
             capture["profile_url"] = k.get("profile_url", "")
@@ -77,6 +78,7 @@ def _call(monkeypatch, *, policy, claims, verdict="verified", li_budget=None,
         policy=policy,
         role_start=2008,
         seed_url=seed_url,
+        seed_overrides_gate=seed_overrides_gate,
     ), conn
 
 
@@ -178,6 +180,42 @@ def test_seed_url_is_passed_through_to_fetch(monkeypatch):
     _call(monkeypatch, policy=ResearchPolicy.DEEP, claims=[],
           seed_url="https://linkedin.com/in/jane-doe", capture=capture)
     assert capture["profile_url"] == "https://linkedin.com/in/jane-doe"
+
+
+# --- targeted read: seed sets the URL, gap-gate decides whether to read --------
+# (the probe finding: read the corrected URL only where PDL is still thin)
+
+def test_gated_seed_skips_read_on_rich_pdl_profile(monkeypatch):
+    """seed_overrides_gate=False + a complete (rich-PDL) profile -> the gap-gate
+    skips the read. This is the Will Carpenter case: PDL already deep, don't
+    spend the ~189-credit read to add a thinner LinkedIn copy."""
+    result, _ = _call(monkeypatch, policy=ResearchPolicy.BULK,
+                      claims=list(_COMPLETE_PROFILE),
+                      seed_url="https://linkedin.com/in/jane-doe",
+                      seed_overrides_gate=False)
+    assert not result.attempted
+
+
+def test_gated_seed_reads_corrected_url_on_thin_pdl_profile(monkeypatch):
+    """seed_overrides_gate=False + a thin profile -> the gap-gate fires AND the
+    read still targets the corrected seed URL. The Payal/Bart case: PDL whiffed,
+    LinkedIn is the whole résumé."""
+    capture: dict = {}
+    result, _ = _call(monkeypatch, policy=ResearchPolicy.BULK, claims=[],
+                      seed_url="https://linkedin.com/in/jane-doe",
+                      seed_overrides_gate=False, capture=capture)
+    assert result.attempted and result.claim_rows
+    assert capture["profile_url"] == "https://linkedin.com/in/jane-doe"
+
+
+def test_gated_seed_refresh_still_bypasses_gate(monkeypatch):
+    """Even with seed_overrides_gate=False, REFRESH bypasses the gap-gate inside
+    the helper — a refresh pass is meant to re-read complete profiles."""
+    result, _ = _call(monkeypatch, policy=ResearchPolicy.REFRESH,
+                      claims=list(_COMPLETE_PROFILE),
+                      seed_url="https://linkedin.com/in/jane-doe",
+                      seed_overrides_gate=False)
+    assert result.attempted and result.claim_rows
 
 
 # --- search-reconciled seed resolution (the Paul-Marc fix) ----------------------
