@@ -28,6 +28,8 @@ from coherence import coherence_report
 from config import DATA_DIR, DB_PATH
 from db import connect
 from enrichment_store import ClaimRow
+from gold_score import GoldReport, load_gold
+from gold_score import score_batch as score_gold
 from person_insights_store import PersonInsight, get_person_insight
 from reconcile import RECONCILE_METHOD_SUFFIX, _source_family
 from scorecard_render import render_table
@@ -223,35 +225,55 @@ def cost_category(cost_usd: float | None, n_verified: int) -> CategoryScore:
     )
 
 
-def identity_category(conn, person_ids: list[int]) -> CategoryScore:
-    """Phase A surfaces the verdict MIX as context but leaves the score
-    unmeasured: rejecting namesakes is correct, so 'percent accepted' is not a
-    'higher is better' quality number. The real correctness measure — the gold
-    must-reject / must-stay-empty hard check — arrives in Phase B and will both
-    score this row and feed the hard gate."""
+def _verdict_mix(conn, person_ids: list[int]) -> dict:
+    """The identity_candidates verdict mix for this batch's people, with the two
+    writers' labels (broker: auto_accept/reject/review; LinkedIn verifier:
+    verified/rejected/review) folded together."""
     if not person_ids:
-        return CategoryScore("identity", None, {"reason": "no people"}, "unmeasured")
+        return {}
     ph = ",".join("?" * len(person_ids))
     rows = conn.execute(
         f"SELECT decision, COUNT(*) c FROM identity_candidates "
         f"WHERE person_id IN ({ph}) GROUP BY decision", person_ids,
     ).fetchall()
     mix = {r["decision"]: r["c"] for r in rows}
-    evaluated = sum(mix.values())
-    if evaluated == 0:
-        return CategoryScore("identity", None, {"reason": "no candidates evaluated"},
-                             "unmeasured")
-    # Two writers use different labels: the identity broker emits auto_accept /
-    # reject / review; the LinkedIn verifier emits verified / rejected / review.
-    verified = sum(v for k, v in mix.items() if k in ("verified", "auto_accept"))
-    rejected = sum(v for k, v in mix.items() if k in ("rejected", "reject"))
-    review = mix.get("review", 0)
-    return CategoryScore(
-        "identity", None,
-        {"verified": verified, "review": review, "rejected": rejected,
-         "evaluated": evaluated},
-        f"mix {verified}✓/{review}?/{rejected}✗ — gold check pending",
-    )
+    return {
+        "verified": sum(v for k, v in mix.items() if k in ("verified", "auto_accept")),
+        "review": mix.get("review", 0),
+        "rejected": sum(v for k, v in mix.items() if k in ("rejected", "reject")),
+        "evaluated": sum(mix.values()),
+    }
+
+
+def identity_category(conn, person_ids: list[int], gold: GoldReport) -> CategoryScore:
+    """Identity correctness. The SCORE is the gold hard-check: did every ghost
+    stay empty and did no must-reject URL leak (the real, falsifiable measure).
+    The verdict MIX rides along as context — a high accept-rate is not 'better',
+    since rejecting namesakes is the right call. Unmeasured ('—') when no gold
+    member is in the batch; any gold violation trips the hard gate."""
+    mix = _verdict_mix(conn, person_ids)
+    metrics = dict(mix)
+    v, r, rev = mix.get("verified", 0), mix.get("rejected", 0), mix.get("review", 0)
+    mix_caveat = f"mix {v}✓/{rev}?/{r}✗"
+    if gold.gold_n == 0:
+        return CategoryScore("identity", None, metrics,
+                             f"{mix_caveat} — no gold in batch")
+    metrics["gold_n"] = gold.gold_n
+    metrics["violations"] = list(gold.violations)
+    caveat = mix_caveat
+    if gold.violations:
+        caveat = f"{len(gold.violations)} GOLD VIOLATION(S) — {mix_caveat}"
+    return CategoryScore("identity", gold.identity_score, metrics, caveat)
+
+
+def accuracy_category(gold: GoldReport) -> CategoryScore:
+    """Per-field match against the gold answer key (positives only). Unmeasured
+    when the batch contains no positive gold member."""
+    if gold.accuracy is None:
+        reason = ("no positive gold in batch" if gold.gold_n else "no gold in batch")
+        return CategoryScore("accuracy", None, {"reason": reason}, "no gold")
+    return CategoryScore("accuracy", gold.accuracy,
+                         {"positives": gold.positives, "gold_n": gold.gold_n})
 
 
 def regression_category(
@@ -318,9 +340,13 @@ def letter_grade(composite: int, gated: bool) -> str:
 
 
 def is_gated(categories: dict[str, CategoryScore]) -> bool:
-    """Hard gate: any future-date P0 in coherence. Phase B adds gold violations."""
+    """Hard gate: any future-date P0 in coherence, or any gold identity violation
+    (must-reject leak / ghost filled). Either caps the batch grade at REVIEW."""
     coh = categories.get("coherence")
-    return bool(coh and coh.metrics.get("p0", 0) > 0)
+    if coh and coh.metrics.get("p0", 0) > 0:
+        return True
+    ident = categories.get("identity")
+    return bool(ident and ident.metrics.get("violations"))
 
 
 # --------------------------------------------------------------------------- #
@@ -465,11 +491,13 @@ def score_batch(conn, records: list[PersonRecord], *, label: str,
     verified = sum(1 for r in records if any(
         c.claim_type == "current_employer" for c in r.claims))
 
+    claims_by_id = {r.person_id: list(r.claims) for r in records}
+    gold = score_gold(load_gold(), claims_by_id)
+
     categories = {
         "coverage": coverage_category(records),
-        "accuracy": CategoryScore("accuracy", None, {"reason": "gold set pending"},
-                                  "Phase B"),
-        "identity": identity_category(conn, person_ids),
+        "accuracy": accuracy_category(gold),
+        "identity": identity_category(conn, person_ids, gold),
         "richness": richness_category(records),
         "coherence": coherence_category(records),
         "corroboration": corroboration_category(records),

@@ -163,6 +163,15 @@ def test_is_gated_on_future_date():
     assert not is_gated(cats_clean)
 
 
+def test_is_gated_on_gold_identity_violation():
+    cats = {
+        "coherence": coherence_category([_full_person()]),  # clean
+        "identity": CategoryScore("identity", 0,
+                                  {"violations": ["X: ghost filled"]}, "GOLD"),
+    }
+    assert is_gated(cats)
+
+
 # --- regression ----------------------------------------------------------------
 
 def test_regression_none_on_first_run():

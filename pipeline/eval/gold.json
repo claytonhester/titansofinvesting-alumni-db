@@ -1,0 +1,120 @@
+[
+  {
+    "person_id": 25,
+    "full_name": "Bart Howe",
+    "verified_on": "2026-06-10",
+    "note": "User-verified against the LinkedIn screenshot during the deep pass.",
+    "expect": {
+      "current_employer": "HealthMark Group",
+      "current_title": "Chief Executive Officer",
+      "education": ["Texas A&M", "Harvard Business School"],
+      "linkedin_url": "https://www.linkedin.com/in/bart-howe-ab65115"
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 15,
+    "full_name": "Payal Patel",
+    "verified_on": "2026-06-10",
+    "note": "User-verified during the deep pass (3->18 claims).",
+    "expect": {
+      "current_employer": "AIM7",
+      "current_title": "Chief of Staff",
+      "education": ["London Business School", "Texas A&M"],
+      "linkedin_url": "https://www.linkedin.com/in/payalpatel1002"
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 779,
+    "full_name": "Ricardo Lopez",
+    "verified_on": "2026-06-09",
+    "note": "P0 namesake incident: wwana.com broker echo spliced a Boston-University / Morgan-Stanley / New-York stranger. Remediated to honest-empty. Must never re-accept the broker URL or carry a current role.",
+    "expect": {},
+    "must_reject_urls": ["wwana.com"],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 33,
+    "full_name": "Michael Rooney",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 744,
+    "full_name": "Peter Foster",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 760,
+    "full_name": "Sofia Kampfe",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 858,
+    "full_name": "Samantha Bell",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 770,
+    "full_name": "Alan Boyd",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 780,
+    "full_name": "James Miller",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — common name, no verifiable footprint. Strong namesake risk.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 817,
+    "full_name": "Austin Christensen",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 783,
+    "full_name": "Priyanka Suri",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 842,
+    "full_name": "Julia Hu",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — common name, no verifiable footprint. Strong namesake risk.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  }
+]
