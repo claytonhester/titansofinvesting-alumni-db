@@ -152,6 +152,13 @@ def recompute_completeness(
     """Compute + persist one person's score AND deep-search flag. Caller commits."""
     breakdown = compute_breakdown(_load_claims(conn, person_id))
     needs_deep, reason = should_flag_for_deep_search(breakdown)
+    # A person already processed by the deep pass never re-flags (queue drains).
+    done = conn.execute(
+        "SELECT deep_search_done FROM person_insights WHERE person_id = ?",
+        (person_id,),
+    ).fetchone()
+    if done and done[0]:
+        needs_deep, reason = False, ""
     conn.execute(
         "UPDATE person_insights SET completeness_score = ?, "
         "needs_deep_search = ?, deep_search_reason = ? WHERE person_id = ?",
@@ -164,7 +171,8 @@ def run(db_path: str, dry_run: bool) -> int:
     with connect(Path(db_path)) as conn:
         init_person_insights_schema(conn)  # additive migration for the column
         people = conn.execute(
-            "SELECT pi.person_id, p.full_name, pi.completeness_score "
+            "SELECT pi.person_id, p.full_name, pi.completeness_score, "
+            "pi.deep_search_done "
             "FROM person_insights pi JOIN people p ON p.id = pi.person_id "
             "ORDER BY pi.person_id"
         ).fetchall()
@@ -175,6 +183,9 @@ def run(db_path: str, dry_run: bool) -> int:
         for row in people:
             breakdown = compute_breakdown(_load_claims(conn, row["person_id"]))
             needs_deep, reason = should_flag_for_deep_search(breakdown)
+            # Already deep-passed → never re-flag (the queue drains).
+            if row["deep_search_done"]:
+                needs_deep, reason = False, ""
             if breakdown.score != (row["completeness_score"] or 0):
                 changed += 1
             # Always write score + flag: the flag is set AND cleared every run, so

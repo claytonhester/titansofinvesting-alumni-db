@@ -115,6 +115,11 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         # so a re-enrich can't clobber the flag before finalize recomputes it.
         "needs_deep_search": "INTEGER NOT NULL DEFAULT 0",
         "deep_search_reason": "TEXT NOT NULL DEFAULT ''",
+        # Sticky: set to 1 once a --needs-deep pass has processed this person, so
+        # the queue DRAINS — a genuinely short career (e.g. 2 roles) or a ghost
+        # the read can't lift won't re-flag and re-burn ~$0.30/run forever. An
+        # operator resets it to 0 to force a deliberate re-sweep.
+        "deep_search_done": "INTEGER NOT NULL DEFAULT 0",
     }
     for col, decl in additive.items():
         if col not in have:

@@ -1112,6 +1112,15 @@ def run(
                         conn, firecrawl, anthropic, person, http, pdl_key, perplexity_key,
                         li_budget=li_budget, fc_budget=fc_budget, policy=policy,
                     )
+                    # Mark a deep-pass person as deep-searched so the queue drains:
+                    # finalize won't re-flag them even if their (genuinely short)
+                    # career still trips the thin rule. Sticky until reset.
+                    if needs_deep:
+                        conn.execute(
+                            "UPDATE person_insights SET deep_search_done = 1 "
+                            "WHERE person_id = ?",
+                            (person.id,),
+                        )
                     conn.commit()  # persist each person before moving on (resumable)
                     est_credits += usage.credits + usage.fc_news_credits
                     haiku_in += usage.haiku_in
