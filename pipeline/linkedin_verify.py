@@ -16,11 +16,13 @@ cannot. This gate therefore inverts both choices:
     what makes agent searches on thin/ghost profiles safe at all.)
 
 Anchors come from the roster — facts a namesake almost never matches:
-  * the school appears in education, in the graduation-year era (±4 years);
-  * the roster first-employer appears in the early career;
+  * the school appears in education (the roster grad year is approximate — often
+    the program year, not a degree year — so it's soft corroboration, not a gate);
+  * the roster employer appears SOMEWHERE in the career (current OR past — the
+    roster may list either, so it need not be the graduation-era job);
   * the roster city appears somewhere in the history (soft corroboration).
 
-Verdicts: "verified" (era + employer corroborate), "rejected" (an anchor
+Verdicts: "verified" (school + employer corroborate), "rejected" (an anchor
 contradicts), "review" (partial/unclear — held for a human, never auto-used).
 Every verdict is persisted to identity_candidates by the caller so the trail
 is auditable like every other identity decision.
@@ -45,29 +47,40 @@ _VALID_DECISIONS = frozenset({DECISION_VERIFIED, DECISION_REJECTED, DECISION_REV
 ERA_TOLERANCE_YEARS = 4
 
 _SYSTEM = """A web agent searched LinkedIn for a specific person by name and \
-returned ONE profile. Your job is to decide whether that profile is the SAME \
-person as the target, using anchors from a trusted alumni roster. Namesakes are \
-common; the roster anchors are facts a namesake almost never matches.
+returned ONE profile. Decide whether that profile is the SAME person as the \
+target, using anchors from a trusted alumni roster. Namesakes are common; the \
+roster anchors are facts a namesake almost never matches.
 
 The target is an alumnus of a Texas university finance/investing program \
 (Titans of Investing). You get their roster anchors and the profile's claimed \
 education and career entries.
 
-Decide ONE verdict for the whole profile:
-- "verified" — the profile POSITIVELY matches: the school appears in education \
-around the expected era, AND the roster employer (their job at graduation) \
-appears in the early career. City agreement strengthens this but is not required.
-- "rejected" — an anchor CONTRADICTS: a different school in that era, an \
-education era that cannot be this person, an early career with no trace of the \
-roster employer plus a profession that does not fit, or clear geography mismatch \
-across the whole history.
-- "review" — partial or unclear: one anchor matches but the other is absent \
-(e.g. education matches but the early career is not shown). Do NOT guess; \
-ambiguity goes to a human.
+Two strong anchors:
+- SCHOOL: the roster school should appear in the profile's education. The roster \
+graduation year is APPROXIMATE — often the year they took the program, not a \
+degree year — so treat the year as soft corroboration, NOT a hard requirement. A \
+clear school match is what counts.
+- EMPLOYER: the roster employer should appear SOMEWHERE in the career. The roster \
+may list a CURRENT or a PAST employer, so it need NOT be the earliest / \
+graduation-era job — its presence anywhere in the history is strong corroboration.
 
-Be strict: "verified" requires positive corroboration, not mere absence of \
-contradiction. A profile with no education and no early career shown can never \
-be "verified".
+Decide ONE verdict for the whole profile:
+- "verified" — POSITIVE match: the roster school appears in education AND the \
+roster employer appears somewhere in the career. City agreement strengthens but \
+is not required. A clear school match plus the roster employer present in the \
+history is ENOUGH even if early/older roles are missing (LinkedIn routinely \
+truncates early career).
+- "rejected" — an anchor CONTRADICTS: a DIFFERENT school where the roster school \
+should be, an education that cannot be this person, NO trace of the roster \
+employer anywhere AND a profession that does not fit, or a clear geography \
+mismatch across the whole history.
+- "review" — genuinely unclear: the school is absent or ambiguous, OR the roster \
+employer appears nowhere and the fit is uncertain. Do NOT guess.
+
+Be strict on CONTRADICTIONS (a different school, a wrong field), but do NOT hold \
+a profile for "review" merely because graduation-era roles are not shown — that \
+is normal on LinkedIn. "verified" requires positive corroboration (school + \
+employer present), not a complete timeline.
 
 Return ONLY a JSON object, no prose:
 {"decision": "verified|rejected|review", "reason": "<short>", "confidence": <0.0-1.0>}"""
@@ -99,7 +112,7 @@ def _build_user(
     claims: list[ClaimRow],
 ) -> str:
     era = (
-        f"around {grad_year} (±{ERA_TOLERANCE_YEARS} years)"
+        f"~{grad_year} (approximate — soft signal only)"
         if grad_year
         else "(unknown)"
     )
@@ -107,8 +120,8 @@ def _build_user(
         "Target person (roster anchors):",
         f"  Name: {name}",
         f"  School: {school or '(unknown)'}",
-        f"  Graduation era: {era}",
-        f"  Employer at graduation: {roster_employer or '(unknown)'}",
+        f"  Roster grad year: {era}",
+        f"  Known employer (roster; may be current OR past): {roster_employer or '(unknown)'}",
         f"  City on roster: {city or '(unknown)'}",
         "",
         f"Returned profile: {profile_url or '(no url)'}",

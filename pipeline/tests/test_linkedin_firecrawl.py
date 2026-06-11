@@ -206,9 +206,10 @@ def test_budget_min_verified_sources_is_tunable():
 
 
 def test_agent_batch_budget_scales_but_floors_at_one_firing():
-    assert agent_batch_budget(1) >= DEFAULT_MAX_CREDITS      # single run can fire once
-    assert agent_batch_budget(100) == 15 * 100               # scales with batch size
-    assert agent_batch_budget(0) >= DEFAULT_MAX_CREDITS      # never negative/zero
+    from linkedin_firecrawl import AGENT_CREDITS_PER_PERSON
+    assert agent_batch_budget(1) >= DEFAULT_MAX_CREDITS               # single run fires once
+    assert agent_batch_budget(100) == AGENT_CREDITS_PER_PERSON * 100  # scales with size
+    assert agent_batch_budget(0) >= DEFAULT_MAX_CREDITS               # never negative/zero
 
 
 # --- Year-gap heuristic -------------------------------------------------------
