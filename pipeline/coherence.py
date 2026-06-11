@@ -66,15 +66,20 @@ def current_employer_in_history(claims: list[ClaimRow]) -> tuple[bool, str]:
     cur = _company_key(emp[0])
     if not cur:
         return True, ""
-    # Most recent: an open-ended role first, else the latest end/start year.
+    # Senior people hold CONCURRENT open-ended roles (a day job + a board seat +
+    # an adjunct professorship). The current employer is coherent as long as it is
+    # one of those active roles — not necessarily the latest-started one.
     open_ended = [e for e in entries if e.start_year is not None and e.end_year is None]
     if open_ended:
-        recent = max(open_ended, key=lambda e: e.start_year)
-    else:
-        dated = [e for e in entries if e.end_year is not None or e.start_year is not None]
-        if not dated:
+        if any(_company_key(e.company) == cur for e in open_ended):
             return True, ""
-        recent = max(dated, key=lambda e: e.end_year or e.start_year or 0)
+        names = ", ".join(sorted({e.company for e in open_ended if e.company}))
+        return False, f"current '{emp[0]}' not among active roles ({names[:60]})"
+    # No open-ended roles at all: fall back to the latest dated role.
+    dated = [e for e in entries if e.end_year is not None or e.start_year is not None]
+    if not dated:
+        return True, ""
+    recent = max(dated, key=lambda e: e.end_year or e.start_year or 0)
     if _company_key(recent.company) and _company_key(recent.company) != cur:
         return False, f"current '{emp[0]}' != latest history '{recent.company}'"
     return True, ""
