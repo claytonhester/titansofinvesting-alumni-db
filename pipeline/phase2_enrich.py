@@ -143,8 +143,19 @@ def _load_targets(
     name: str | None,
     titan_class: int | None = None,
     school: str | None = None,
+    ids: list[int] | None = None,
 ) -> list[Person]:
-    if name:
+    if ids:
+        # Explicit person IDs: a targeted (re-)research pass. Deliberately does NOT
+        # exclude already-done people — re-running rebuilds their profile via the
+        # replace_* persistence, which is the point of a deep pass.
+        placeholders = ",".join("?" * len(ids))
+        rows = conn.execute(
+            "SELECT id, full_name, initial_company, city, school, titan_class "
+            f"FROM people WHERE id IN ({placeholders}) ORDER BY id",
+            ids,
+        ).fetchall()
+    elif name:
         rows = conn.execute(
             "SELECT id, full_name, initial_company, city, school, titan_class "
             "FROM people WHERE full_name = ?",
@@ -272,6 +283,7 @@ def enrich_person(
     *,
     li_budget: LinkedInBudget | None = None,
     fc_budget: FirecrawlBudget | None = None,
+    force_deep: bool = False,
 ) -> _PersonUsage:
     """Run the full pipeline for one person and persist every stage. Records
     batch_status per phase so a crash mid-batch resumes cleanly. Returns the
@@ -364,7 +376,11 @@ def enrich_person(
     #   2. the LinkedIn agent (its own gap-filling triple-gate; biggest line item),
     #   3. the press/news pass.
     pdl_matched = bool(pdl and pdl.matched)
-    deep = is_high_signal(
+    # --force-deep: operator override for a targeted re-research pass. The signal
+    # gate exists to avoid spending Firecrawl on no-footprint people in bulk runs,
+    # but a deep pass targets exactly those people on purpose — the operator has
+    # already decided they warrant the spend (still bounded by fc/li budgets).
+    deep = force_deep or is_high_signal(
         pdl_matched=pdl_matched,
         trusted_count=len(trusted),
         has_current_employer=bool(_verified_employer),
@@ -725,6 +741,9 @@ def run(
     titan_class: int | None = None,
     school: str | None = None,
     max_credits: int | None = None,
+    ids: list[int] | None = None,
+    no_pdl: bool = False,
+    force_deep: bool = False,
 ) -> int:
     firecrawl = Firecrawl(api_key=require_key("FIRECRAWL_API_KEY"))
     anthropic = Anthropic(api_key=require_key("ANTHROPIC_API_KEY"))
@@ -732,7 +751,9 @@ def run(
     # PDL / Perplexity keys are SOFT: their absence simply skips that source so
     # existing runs keep working before the keys are funded. Both are billed
     # (PDL per match, Perplexity per search), so we read them once per run.
-    pdl_key = os.getenv("PDL_API_KEY")
+    # --no-pdl hard-disables PDL for the run regardless of the key — used when the
+    # monthly match quota must be preserved for hand-picked fills.
+    pdl_key = None if no_pdl else os.getenv("PDL_API_KEY")
     perplexity_key = os.getenv("PERPLEXITY_API_KEY")
 
     with connect(DB_PATH) as conn:
@@ -741,7 +762,7 @@ def run(
         init_person_insights_schema(conn)
         init_person_company_schema(conn)
         init_news_schema(conn)
-        people = _load_targets(conn, limit, name, titan_class, school)
+        people = _load_targets(conn, limit, name, titan_class, school, ids)
         if not people:
             print("Nothing to enrich (all targets done or none matched).", file=sys.stderr)
             return 1
@@ -777,7 +798,7 @@ def run(
                 try:
                     usage = enrich_person(
                         conn, firecrawl, anthropic, person, http, pdl_key, perplexity_key,
-                        li_budget=li_budget, fc_budget=fc_budget,
+                        li_budget=li_budget, fc_budget=fc_budget, force_deep=force_deep,
                     )
                     conn.commit()  # persist each person before moving on (resumable)
                     est_credits += usage.credits + usage.fc_news_credits
@@ -826,10 +847,13 @@ def run(
                     print(f"  ERROR: {exc}", file=sys.stderr)
 
     credits_after = remaining_credits(firecrawl)
-    batch_label = name or (
-        f"{school or 'class'}-{titan_class}" if titan_class is not None
-        else f"enrich-{processed}"
-    )
+    if ids:
+        batch_label = f"deep-pass-{processed}"
+    else:
+        batch_label = name or (
+            f"{school or 'class'}-{titan_class}" if titan_class is not None
+            else f"enrich-{processed}"
+        )
     entry = build_entry(
         label=batch_label,
         people=processed,
@@ -874,14 +898,35 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-credits", dest="max_credits", type=int, default=None,
                    help="Hard ceiling on DEEP Firecrawl credits for this run "
                         "(baseline discovery is free); defaults to the live balance")
+    p.add_argument("--ids", default=None,
+                   help="Comma-separated person IDs to (re-)enrich, e.g. '770,817'. "
+                        "Bypasses the done-check: targets are rebuilt in place")
+    p.add_argument("--no-pdl", dest="no_pdl", action="store_true",
+                   help="Hard-disable PDL for this run (preserve the monthly quota)")
+    p.add_argument("--force-deep", dest="force_deep", action="store_true",
+                   help="Override the high-signal gate: run the deep Firecrawl path "
+                        "(career scrape / LinkedIn agent / news) for every target")
     return p
+
+
+def _parse_ids(raw: str | None) -> list[int] | None:
+    if raw is None:
+        return None
+    try:
+        ids = [int(tok) for tok in raw.split(",") if tok.strip()]
+    except ValueError as exc:
+        raise SystemExit(f"--ids must be comma-separated integers: {exc}")
+    if not ids:
+        raise SystemExit("--ids given but no valid IDs parsed")
+    return ids
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     return run(limit=args.limit, name=args.name,
                titan_class=args.titan_class, school=args.school,
-               max_credits=args.max_credits)
+               max_credits=args.max_credits, ids=_parse_ids(args.ids),
+               no_pdl=args.no_pdl, force_deep=args.force_deep)
 
 
 if __name__ == "__main__":
