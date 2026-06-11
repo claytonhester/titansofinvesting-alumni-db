@@ -26,34 +26,37 @@ def test_no_current_role_flags():
 
 def test_thin_career_flags():
     needs, reason = should_flag_for_deep_search(_bd(career_entries=2))
-    assert needs is True and "thin/undated career" in reason
+    assert needs is True and "thin career" in reason
 
 
-def test_undated_career_flags():
+def test_undated_career_does_NOT_flag():
+    """A dated-share gap is data hygiene, not a deep-read target — don't flag."""
     needs, reason = should_flag_for_deep_search(_bd(dated_career_share=0.5))
-    assert needs is True and "thin/undated career" in reason
+    assert needs is False and reason == ""
 
 
-def test_no_bio_flags():
+def test_no_bio_does_NOT_flag():
+    """Bio is synthesized free in the base pass — never worth a Firecrawl read."""
     needs, reason = should_flag_for_deep_search(_bd(has_bio=False))
-    assert needs is True and "no bio" in reason
+    assert needs is False and reason == ""
 
 
-def test_low_score_flags():
-    # A profile can have a full role+careers+bio but a <60 score via missing
-    # education/press/linkedin — the score floor still flags it.
-    needs, reason = should_flag_for_deep_search(_bd(score=55))
-    assert needs is True and "completeness<60" in reason
+def test_low_score_alone_does_NOT_flag():
+    """A <60 score from missing education/press/linkedin (career intact) is not a
+    deep-read target — only thin career / no current role are."""
+    needs, reason = should_flag_for_deep_search(
+        _bd(score=45, has_education=False, has_press=False, has_linkedin=False))
+    assert needs is False and reason == ""
 
 
 def test_multiple_reasons_joined():
     needs, reason = should_flag_for_deep_search(
-        _bd(score=30, has_current_role=False, career_entries=0, has_bio=False))
+        _bd(has_current_role=False, career_entries=0))
     assert needs is True
-    for part in ("no current role", "thin/undated career", "no bio", "completeness<60"):
+    for part in ("no current role", "thin career"):
         assert part in reason
 
 
 def test_deterministic():
-    bd = _bd(score=58, has_current_role=False, career_entries=1, dated_career_share=0.0)
+    bd = _bd(has_current_role=False, career_entries=1)
     assert should_flag_for_deep_search(bd) == should_flag_for_deep_search(bd)
