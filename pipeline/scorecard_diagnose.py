@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from scorecard import ScorecardRun
 
-# Same targets the table renders against — a category below its target is "weak".
-from scorecard_render import TARGETS
+# The same floors/ratchet the table renders against.
+from scorecard_render import FLOORS, RATCHET_SLACK
 
 
 @dataclass(frozen=True)
@@ -139,10 +139,14 @@ _BUILDERS = {
 }
 
 
-def diagnose(run: "ScorecardRun") -> Diagnosis:
-    """Deterministic cause->lever map. A measured category below its target
-    becomes an issue; at/above target it's a win. Identity violations and
-    regressions get their own explicit findings."""
+def diagnose(run: "ScorecardRun", targets: dict | None = None) -> Diagnosis:
+    """Deterministic cause->lever map. A measured category that clears its
+    (ratcheted) target is a win; one that falls more than RATCHET_SLACK below it
+    is an issue — the slack absorbs batch-to-batch composition noise so a small
+    dip isn't cried wolf. `targets` is the live bar per category (max of floor
+    and best-so-far); defaults to the floors when no history is threaded in.
+    Identity violations and regressions get their own explicit findings."""
+    targets = targets or dict(FLOORS)
     wins: list[str] = []
     issues: list[DiagnosisItem] = []
 
@@ -150,10 +154,10 @@ def diagnose(run: "ScorecardRun") -> Diagnosis:
         cat = run.categories.get(key)
         if cat is None or cat.score is None:
             continue
-        target = TARGETS.get(key, 100)
+        target = targets.get(key, 100)
         if cat.score >= target:
             wins.append(f"{cat.name.title()} {cat.score} (≥{target})")
-        else:
+        elif cat.score < target - RATCHET_SLACK:
             issues.append(builder(cat))
 
     # Identity is special: a violation is the single most important finding.
@@ -168,7 +172,7 @@ def diagnose(run: "ScorecardRun") -> Diagnosis:
             "Do not ship. Re-run remediation on the named person and re-audit "
             "the identity gate before the next batch.",
         ))
-    elif ident and ident.score is not None and ident.score >= TARGETS.get("identity", 75):
+    elif ident and ident.score is not None and ident.score >= targets.get("identity", 100):
         wins.append(f"Identity {ident.score} (gold clean)")
 
     reg = run.categories.get("regression")

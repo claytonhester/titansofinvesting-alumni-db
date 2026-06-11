@@ -50,6 +50,21 @@ def test_unmeasured_category_is_skipped():
     assert not diag.wins and not diag.issues
 
 
+def test_small_dip_within_slack_is_not_flagged():
+    # Coverage 79 vs a ratcheted target of 80 — within RATCHET_SLACK, so it is
+    # neither a win nor an issue (batch-composition noise, not a regression).
+    run = _run({"coverage": _cat("coverage", 79)})
+    diag = diagnose(run, {"coverage": 80})
+    assert not diag.issues and not diag.wins
+
+
+def test_ratcheted_target_makes_a_formerly_passing_score_an_issue():
+    # Coverage 82 was fine against the floor, but the bar ratcheted to 90.
+    run = _run({"coverage": _cat("coverage", 82)})
+    diag = diagnose(run, {"coverage": 90})
+    assert diag.issues and diag.issues[0].category == "Coverage"
+
+
 def test_coherence_issue_names_top_failing_rules():
     cat = _cat("coherence", 92,
                {"by_rule": {"no_zero_duration_dupes": 20, "employer_in_history": 14},

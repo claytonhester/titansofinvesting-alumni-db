@@ -597,7 +597,8 @@ def main(argv: list[str] | None = None) -> int:
     print(render_table(prior_runs, run, history=args.history))
 
     from scorecard_diagnose import diagnose, render_diagnosis
-    diag = diagnose(run)
+    from scorecard_render import effective_targets
+    diag = diagnose(run, effective_targets(prior_runs))
     print("\n" + render_diagnosis(diag))
 
     if args.llm:
