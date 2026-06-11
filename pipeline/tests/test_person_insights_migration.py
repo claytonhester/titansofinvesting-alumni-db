@@ -18,6 +18,7 @@ def test_migration_adds_both_columns_idempotently():
     second = _cols(conn)
     assert "needs_deep_search" in second
     assert "deep_search_reason" in second
+    assert "deep_search_done" in second
     assert first == second
 
 

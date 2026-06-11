@@ -175,3 +175,23 @@ def test_rich_profile_never_flagged():
     replace_claims(conn, 1, _full_profile())
     recompute_completeness(conn, 1)
     assert _flag(conn) == (0, "")
+
+
+def test_deep_done_person_does_not_reflag_when_still_thin():
+    """The queue-drain fix: a person already deep-passed (deep_search_done=1) must
+    NOT re-flag even if their short career still trips the thin rule — else the
+    deep pass re-runs them at ~$0.30 forever (the Andy Cronin case)."""
+    conn = _conn_with_person()
+    # A genuinely short-but-complete career: current role + only 2 dated roles.
+    replace_claims(conn, 1, [
+        _c("current_employer", "Lenox Park"), _c("current_title", "Partner"),
+        _c("career_history", "Partner at Lenox Park (2020-present)"),
+        _c("career_history", "Analyst at TRS (2009-2012)"),
+    ])
+    recompute_completeness(conn, 1)
+    assert _flag(conn)[0] == 1  # thin (<3 roles) -> flagged on the first pass
+
+    # The deep pass ran; mark it done. Now finalize must NOT re-flag.
+    conn.execute("UPDATE person_insights SET deep_search_done=1 WHERE person_id=1")
+    recompute_completeness(conn, 1)
+    assert _flag(conn) == (0, "")  # drained
