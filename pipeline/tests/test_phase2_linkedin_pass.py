@@ -57,9 +57,12 @@ _COMPLETE_PROFILE = [
 
 
 def _call(monkeypatch, *, policy, claims, verdict="verified", li_budget=None,
-          fc_budget=None, found=True):
-    monkeypatch.setattr(phase2_enrich, "fetch_linkedin",
-                        lambda *a, **k: _li_result(found=found))
+          fc_budget=None, found=True, seed_url="", capture=None):
+    def _fake_fetch(*a, **k):
+        if capture is not None:
+            capture["profile_url"] = k.get("profile_url", "")
+        return _li_result(found=found)
+    monkeypatch.setattr(phase2_enrich, "fetch_linkedin", _fake_fetch)
     monkeypatch.setattr(
         phase2_enrich, "verify_linkedin_profile",
         lambda *a, **k: (LinkedInVerdict(verdict, "test", 0.9), 8, 3))
@@ -73,6 +76,7 @@ def _call(monkeypatch, *, policy, claims, verdict="verified", li_budget=None,
         fc_budget=fc_budget or FirecrawlBudget(500),
         policy=policy,
         role_start=2008,
+        seed_url=seed_url,
     ), conn
 
 
@@ -138,3 +142,39 @@ def test_bulk_does_not_run_linkedin_before_pdl(monkeypatch):
     assert not force_deep_path(ResearchPolicy.BULK)        # pre_deep is False
     assert force_deep_path(ResearchPolicy.DEEP)
     assert force_deep_path(ResearchPolicy.REFRESH)
+
+
+# --- URL-seeded LinkedIn read (the Will Carpenter fix) --------------------------
+
+def test_candidate_url_harvested_from_claims():
+    from phase2_enrich import _candidate_linkedin_url
+    claims = [
+        ClaimRow("current_employer", "Acme", "", "", 0.9, "x"),
+        ClaimRow("public_links", "LinkedIn",
+                 "https://linkedin.com/in/will-carpenter-13b4b33/", "", 0.8, "pdl"),
+    ]
+    assert _candidate_linkedin_url(claims) == \
+        "https://linkedin.com/in/will-carpenter-13b4b33"
+
+
+def test_no_candidate_url_returns_empty():
+    from phase2_enrich import _candidate_linkedin_url
+    assert _candidate_linkedin_url(
+        [ClaimRow("current_employer", "Acme", "", "", 0.9, "x")]) == ""
+
+
+def test_seed_url_fires_even_when_gap_gate_would_skip(monkeypatch):
+    """A known profile URL is worth reading even on a complete profile (it
+    corroborates) — the seed overrides the gap-gate that BULK would otherwise
+    use to skip a complete-looking person."""
+    result, _ = _call(monkeypatch, policy=ResearchPolicy.BULK,
+                      claims=list(_COMPLETE_PROFILE),
+                      seed_url="https://linkedin.com/in/jane-doe")
+    assert result.attempted and result.claim_rows  # fired despite "complete"
+
+
+def test_seed_url_is_passed_through_to_fetch(monkeypatch):
+    capture: dict = {}
+    _call(monkeypatch, policy=ResearchPolicy.DEEP, claims=[],
+          seed_url="https://linkedin.com/in/jane-doe", capture=capture)
+    assert capture["profile_url"] == "https://linkedin.com/in/jane-doe"

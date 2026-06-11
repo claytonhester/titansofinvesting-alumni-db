@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -293,6 +294,20 @@ class _LinkedInPass:
 
 _LI_NOT_ATTEMPTED = _LinkedInPass((), "", 0, 0, 0, False)
 
+_LINKEDIN_IN_RE = re.compile(r"https?://[^\s)\"']*linkedin\.com/in/[^\s)\"']+", re.I)
+
+
+def _candidate_linkedin_url(claim_rows: list[ClaimRow]) -> str:
+    """A concrete linkedin.com/in/ URL already present in the claims (PDL returns
+    one; verified mentions sometimes do). Reading a KNOWN profile beats a blind
+    name search — this is the seed for that. Returns '' when none is on hand."""
+    for c in claim_rows:
+        for field in (c.source_url or "", c.value or ""):
+            m = _LINKEDIN_IN_RE.search(field)
+            if m:
+                return m.group(0).rstrip("/")
+    return ""
+
 
 def _linkedin_pass(
     conn: sqlite3.Connection,
@@ -307,6 +322,7 @@ def _linkedin_pass(
     fc_budget: FirecrawlBudget,
     policy: ResearchPolicy,
     role_start: int | None,
+    seed_url: str = "",
 ) -> _LinkedInPass:
     """Gated LinkedIn agent fetch + the fail-closed roster verifier.
 
@@ -314,8 +330,20 @@ def _linkedin_pass(
     claims join the pool (closing the old hole where agent output was extended
     in unverified), and the verdict is persisted to identity_candidates.
     Under REFRESH the gap-gate and min-source criteria are bypassed — the
-    verifier IS the namesake protection — but both budgets still bind."""
-    if bypass_linkedin_gap_gate(policy):
+    verifier IS the namesake protection — but both budgets still bind.
+
+    `seed_url` is a known linkedin.com/in/ URL (from PDL or a verified mention):
+    when present the agent READS that exact profile instead of blind-searching,
+    which is far more reliable. A seed is worth firing for even on an otherwise
+    complete profile (it corroborates), so it overrides the gap-gate — but never
+    the budgets, and the roster verifier still guards against a wrong URL."""
+    if seed_url:
+        decision = (
+            LinkedInDecision(True, "seeded url")
+            if li_budget.remaining > 0
+            else LinkedInDecision(False, "batch LinkedIn budget spent")
+        )
+    elif bypass_linkedin_gap_gate(policy):
         decision = (
             LinkedInDecision(True, "refresh policy")
             if li_budget.remaining > 0
@@ -336,7 +364,8 @@ def _linkedin_pass(
 
     try:
         li = fetch_linkedin(
-            firecrawl, person.full_name, employer=employer_hint, city=person.city
+            firecrawl, person.full_name, employer=employer_hint, city=person.city,
+            profile_url=seed_url,
         )
     except PaymentRequiredError:
         print("  Firecrawl LinkedIn: no credits — skipped")
@@ -444,6 +473,10 @@ def enrich_person(
     # the pre-rewrite pipeline EXCEPT that its LinkedIn output now passes through
     # the verifier — a pure safety add, never a reordering or a gating change.
     li_pass = _LI_NOT_ATTEMPTED
+    # LinkedIn-agent accounting accumulates across BOTH possible firings (the
+    # pre-PDL pass and the post-PDL seeded retry), so neither credits nor verify
+    # tokens are lost when both run.
+    li_credits_acc = li_vin_acc = li_vout_acc = n_li_acc = 0
     pre_deep = force_deep_path(policy)
     if pre_deep:
         li_pass = _linkedin_pass(
@@ -455,7 +488,12 @@ def enrich_person(
             fc_budget=fc_budget,
             policy=policy,
             role_start=_current_role_start_year_from_claims(claim_rows),
+            seed_url=_candidate_linkedin_url(claim_rows),
         )
+        li_credits_acc += li_pass.credits
+        li_vin_acc += li_pass.verify_in
+        li_vout_acc += li_pass.verify_out
+        n_li_acc += len(li_pass.claim_rows)
         if li_pass.claim_rows:
             claim_rows.extend(li_pass.claim_rows)
 
@@ -564,10 +602,14 @@ def enrich_person(
                 + _candidate_rows(dident.verdicts, "sonnet"),
             )
 
-        # 2. LinkedIn agent fallback — only when the pre-PDL pass didn't attempt
-        #    it (a person whose deep signal arrived WITH the PDL match). Same
+        # 2. LinkedIn agent — fire when the pre-PDL pass didn't attempt it (BULK),
+        #    OR it attempted but couldn't verify AND we now hold a concrete profile
+        #    URL (usually surfaced by PDL): read THAT exact profile. A known-URL
+        #    read is far more reliable than the blind name search that just missed
+        #    — and even on a PDL-complete profile it corroborates the résumé. Same
         #    verified path; charges both ceilings inside the helper.
-        if not li_pass.attempted:
+        li_seed_url = _candidate_linkedin_url(claim_rows)
+        if (not li_pass.attempted) or (not li_pass.verified_employer and li_seed_url):
             _li_role_start = (
                 pdl.attributes.current_role_start_year
                 if pdl is not None
@@ -582,7 +624,12 @@ def enrich_person(
                 fc_budget=fc_budget,
                 policy=policy,
                 role_start=_li_role_start,
+                seed_url=li_seed_url,
             )
+            li_credits_acc += li_pass.credits
+            li_vin_acc += li_pass.verify_in
+            li_vout_acc += li_pass.verify_out
+            n_li_acc += len(li_pass.claim_rows)
             if li_pass.claim_rows:
                 claim_rows.extend(li_pass.claim_rows)
 
@@ -646,11 +693,12 @@ def enrich_person(
             fc_news_in, fc_news_out = fc_news.input_tokens, fc_news.output_tokens
             n_fc_news = len(fc_news.claim_rows)
 
-    # LinkedIn accounting covers BOTH call sites (pre-PDL and the deep fallback) —
-    # li_pass always holds the single attempt that ran (the helper is called at
-    # most once per person).
-    li_credits = li_pass.credits
-    n_li = len(li_pass.claim_rows)
+    # LinkedIn accounting covers BOTH call sites (pre-PDL and the deep/seeded
+    # fallback). The helper can now fire twice (a blind miss then a URL-seeded
+    # read), so credits and claim counts come from the accumulators, not the last
+    # li_pass alone.
+    li_credits = li_credits_acc
+    n_li = n_li_acc
 
     # Compose a short_bio from the verified facts when no source handed us a
     # ready-made narrative. Built from the FULL résumé set (baseline + PDL + any deep
@@ -873,7 +921,7 @@ def enrich_person(
             + fc_news_in
             + rec_in
             + pdl_pv_in
-            + li_pass.verify_in
+            + li_vin_acc
             + kpi_in
             + news_in
         ),
@@ -884,7 +932,7 @@ def enrich_person(
             + fc_news_out
             + rec_out
             + pdl_pv_out
-            + li_pass.verify_out
+            + li_vout_acc
             + kpi_out
             + news_out
         ),
