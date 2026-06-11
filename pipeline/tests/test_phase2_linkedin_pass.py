@@ -126,3 +126,15 @@ def test_not_found_charges_budgets_without_verifier(monkeypatch):
     assert result.credits == 42 and li_budget.remaining == 458
     assert result.verify_in == 0  # verifier not called on a not-found
     assert conn.execute("SELECT COUNT(*) FROM identity_candidates").fetchone()[0] == 0
+
+
+# --- BULK ordering: the LinkedIn-first reorder is DEEP/REFRESH only --------------
+
+def test_bulk_does_not_run_linkedin_before_pdl(monkeypatch):
+    """Regression for the review finding: under BULK, the pre-PDL LinkedIn pass
+    must NOT fire (BULK keeps the original post-PDL ordering). Only the explicit
+    LinkedIn-first policies reorder. We assert the gate the rewire keys on."""
+    from research_policy import force_deep_path
+    assert not force_deep_path(ResearchPolicy.BULK)        # pre_deep is False
+    assert force_deep_path(ResearchPolicy.DEEP)
+    assert force_deep_path(ResearchPolicy.REFRESH)

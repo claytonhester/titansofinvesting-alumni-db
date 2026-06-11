@@ -258,3 +258,51 @@ def test_tiebreak_only_touches_career_groups():
     out = _apply(resume, [_decision("current_employer", "Acme Capital", [0, 1], 0)])
     assert len(out) == 1
     assert out[0].source_url == "https://a.com"  # model's primary untouched
+
+
+def test_tiebreak_blended_dated_canonical_keeps_model_primary():
+    """Quote/value-mismatch guard: when the canonical is dated but its text
+    matches NO single member (a blend of title from one + dates from another),
+    provenance stays with the model's primary — never routed to a member whose
+    quote wouldn't attest the blended value."""
+    resume = [
+        _claim("career_history", "Analyst at TRS", src="https://web.com",
+               quote="works as analyst", method="firecrawl"),
+        _claim("career_history", "Senior Analyst, Teachers Retirement (2015-2018)",
+               src="https://linkedin.com/in/x", quote="Senior Analyst 2015-2018",
+               method="firecrawl-linkedin"),
+    ]
+    # Model blends: title-ish from neither verbatim, dates from member 1.
+    out = _apply(resume, [_decision(
+        "career_history", "Senior Analyst at TRS (2015-2018)", [0, 1], 0)])
+    assert len(out) == 1
+    # canonical != either member verbatim -> keep model primary (member 0)
+    assert out[0].source_url == "https://web.com"
+
+
+def test_tiebreak_is_convergent_across_two_passes():
+    """Reconciling the runner's output again must be idempotent (linkedin_refresh
+    reconciles the full set on every run). Simulate the second pass on the dated
+    value the first pass emits and assert it is stable."""
+    resume = [
+        _claim("career_history", "Co-founder of Holland Course Capital",
+               src="https://theorg.com/x", method="firecrawl"),
+        _claim("career_history",
+               "Co-Founder & Managing Partner at Holland Course Capital (2017-present)",
+               src="https://linkedin.com/in/bart", method="firecrawl-linkedin"),
+    ]
+    first = _apply(resume, [_decision(
+        "career_history", "Co-founder of Holland Course Capital", [0, 1], 0)])
+    assert len(first) == 1
+    # Second pass: the emitted dated value is now a member; the model again
+    # (worst case) crowns an undated phrasing. Output must equal the first pass.
+    second_in = [
+        first[0],
+        _claim("career_history", "Co-founder of Holland Course Capital",
+               src="https://theorg.com/x", method="firecrawl"),
+    ]
+    second = _apply(second_in, [_decision(
+        "career_history", "Co-founder of Holland Course Capital", [0, 1], 0)])
+    assert len(second) == 1
+    assert second[0].value == first[0].value
+    assert second[0].source_url == first[0].source_url
