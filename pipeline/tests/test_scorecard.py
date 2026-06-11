@@ -77,6 +77,17 @@ def test_richness_is_mean_completeness():
     assert cat.metrics["thin"] == 1
 
 
+def test_richness_unmeasured_when_completeness_all_zero():
+    # A freshly-enriched batch before compute_completeness ran -> '—', not 'thin'.
+    cat = richness_category([_full_person(completeness=0), _full_person(completeness=0)])
+    assert cat.score is None and "compute_completeness" in cat.caveat
+
+
+def test_cost_unmeasured_without_prior_run():
+    # No prior scorecard timestamp -> can't bound the batch window -> unmeasured.
+    assert sc._batch_cost_usd(None) is None
+
+
 # --- coherence -----------------------------------------------------------------
 
 def test_coherence_clean_batch_is_100():

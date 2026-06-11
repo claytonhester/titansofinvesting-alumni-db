@@ -163,9 +163,16 @@ def _has_dated_career(claims: tuple[ClaimRow, ...]) -> bool:
 
 
 def richness_category(records: list[PersonRecord]) -> CategoryScore:
-    """Distribution of the deterministic completeness_score (0-100)."""
+    """Distribution of the deterministic completeness_score (0-100). completeness
+    is a FINALIZE step (compute_completeness.py), not written by phase2 — so a
+    freshly-enriched, not-yet-finalized batch reads all-zero. Detect that and
+    return unmeasured ('—') rather than a misleading 'everyone is thin'."""
     n = len(records)
     scores = [r.completeness for r in records]
+    if n and all(s == 0 for s in scores):
+        return CategoryScore("richness", None,
+                             {"reason": "completeness not computed"},
+                             "run compute_completeness.py first")
     mean = round(sum(scores) / n) if n else 0
     thin = sum(1 for s in scores if s < THIN_COMPLETENESS)
     caveat = "thin tail" if thin > n * 0.25 else ""
@@ -418,7 +425,14 @@ def _build_records(conn, people: list[dict]) -> list[PersonRecord]:
 
 def _batch_cost_usd(since: str | None) -> float | None:
     """Sum total_usd of cost_log rows newer than `since`. None if the log is
-    missing or no rows fall in the window (older batches predate logging)."""
+    missing or no rows fall in the window (older batches predate logging).
+
+    `since` is the prior scorecard run's timestamp — the only honest lower bound
+    on THIS batch's cost window. With no prior run we can't tell which rows belong
+    to this batch (summing the whole history would wildly overstate it), so cost
+    is left unmeasured ('—') rather than reported wrong."""
+    if since is None:
+        return None
     from cost_log import DEFAULT_LOG_PATH
     if not DEFAULT_LOG_PATH.exists():
         return None
