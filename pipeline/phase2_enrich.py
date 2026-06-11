@@ -49,6 +49,7 @@ from linkedin_firecrawl import (
     fetch_linkedin,
 )
 from linkedin_verify import verify_linkedin_profile
+from linkedin_search import choose_linkedin_url, search_linkedin_candidates
 from research_policy import (
     ResearchPolicy,
     bypass_linkedin_gap_gate,
@@ -307,6 +308,54 @@ def _candidate_linkedin_url(claim_rows: list[ClaimRow]) -> str:
             if m:
                 return m.group(0).rstrip("/")
     return ""
+
+
+def _resolve_linkedin_seed(
+    http: httpx.Client,
+    perplexity_key: str | None,
+    person: Person,
+    claim_rows: list[ClaimRow],
+    *,
+    verified_employer: str = "",
+) -> tuple[str, ClaimRow | None]:
+    """The human move: search "name + university + employer" and read the
+    LinkedIn URL off the results, then reconcile it against PDL's guess.
+
+    PDL returns a linkedin_url but it is sometimes a wrong slug (it gave
+    `paul-marc-schweitzer`; the real profile is `pmschweitzer`). A plain
+    Perplexity search surfaces the correct one and catches that error, while
+    safely deferring to PDL for namesake-prone common names (the chooser holds
+    PDL on weak/ambiguous hits). Returns the chosen seed URL plus, when the
+    search CORRECTED PDL's guess, a claim recording the corrected URL so the
+    right profile is persisted even if the downstream read fails. Never raises —
+    a search outage degrades to PDL's URL alone."""
+    pdl_url = _candidate_linkedin_url(claim_rows)
+    employer = verified_employer or person.company or ""
+    try:
+        candidates = search_linkedin_candidates(
+            http, perplexity_key, person.full_name,
+            school=person.school or "", employer=employer,
+        )
+    except Exception:
+        candidates = []
+    chosen, reason = choose_linkedin_url(pdl_url, candidates)
+    if not chosen:
+        return pdl_url, None
+    corrected: ClaimRow | None = None
+    # Record the chosen URL only when search CHANGED PDL's guess (or PDL had
+    # none) — an unchanged confirmation is already on file as PDL's own claim.
+    if "overrides" in reason or "best search" in reason or (
+        not pdl_url and chosen
+    ):
+        corrected = ClaimRow(
+            claim_type="linkedin_url",
+            value=chosen,
+            source_url=chosen,
+            quote=f"search-resolved ({reason})",
+            confidence=0.7,
+            extraction_method="linkedin_search",
+        )
+    return chosen, corrected
 
 
 def _linkedin_pass(
@@ -608,7 +657,16 @@ def enrich_person(
         #    read is far more reliable than the blind name search that just missed
         #    — and even on a PDL-complete profile it corroborates the résumé. Same
         #    verified path; charges both ceilings inside the helper.
-        li_seed_url = _candidate_linkedin_url(claim_rows)
+        # Resolve the seed via the human search method (name + school +
+        # employer) reconciled against PDL's guess — this catches PDL's wrong
+        # slugs and records the corrected URL even if the read below fails.
+        li_seed_url, li_seed_claim = _resolve_linkedin_seed(
+            http, perplexity_key, person, claim_rows,
+            verified_employer=li_pass.verified_employer or _verified_employer,
+        )
+        if li_seed_claim is not None:
+            claim_rows.append(li_seed_claim)
+            print(f"  LinkedIn search: corrected seed → {li_seed_url}")
         if (not li_pass.attempted) or (not li_pass.verified_employer and li_seed_url):
             _li_role_start = (
                 pdl.attributes.current_role_start_year

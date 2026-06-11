@@ -178,3 +178,61 @@ def test_seed_url_is_passed_through_to_fetch(monkeypatch):
     _call(monkeypatch, policy=ResearchPolicy.DEEP, claims=[],
           seed_url="https://linkedin.com/in/jane-doe", capture=capture)
     assert capture["profile_url"] == "https://linkedin.com/in/jane-doe"
+
+
+# --- search-reconciled seed resolution (the Paul-Marc fix) ----------------------
+
+from linkedin_search import LinkedInCandidate  # noqa: E402
+from phase2_enrich import _resolve_linkedin_seed  # noqa: E402
+
+
+def _stub_search(monkeypatch, candidates):
+    monkeypatch.setattr(
+        phase2_enrich, "search_linkedin_candidates",
+        lambda *a, **k: list(candidates))
+
+
+def test_resolve_seed_records_claim_when_search_corrects_pdl(monkeypatch):
+    # PDL guessed a wrong slug; a strongly-corroborated search hit overrides it
+    # and the corrected URL is recorded as a claim.
+    pdl_claim = ClaimRow("public_links", "LinkedIn",
+                         "https://linkedin.com/in/paul-marc-schweitzer", "", 0.8, "pdl")
+    _stub_search(monkeypatch, [
+        LinkedInCandidate("https://linkedin.com/in/pmschweitzer", 2.0,
+                          "name,employer", "search")])
+    url, claim = _resolve_linkedin_seed(
+        object(), "key", _PERSON, [pdl_claim], verified_employer="JP Morgan")
+    assert url == "https://linkedin.com/in/pmschweitzer"
+    assert claim is not None and claim.value == url
+    assert claim.extraction_method == "linkedin_search"
+
+
+def test_resolve_seed_no_claim_when_search_confirms_pdl(monkeypatch):
+    # Search agrees with PDL -> keep PDL, record nothing new.
+    pdl_claim = ClaimRow("public_links", "LinkedIn",
+                         "https://linkedin.com/in/jane-doe", "", 0.8, "pdl")
+    _stub_search(monkeypatch, [
+        LinkedInCandidate("https://linkedin.com/in/jane-doe", 3.0,
+                          "name,employer", "search")])
+    url, claim = _resolve_linkedin_seed(
+        object(), "key", _PERSON, [pdl_claim])
+    assert url == "https://linkedin.com/in/jane-doe" and claim is None
+
+
+def test_resolve_seed_falls_back_to_pdl_on_search_outage(monkeypatch):
+    pdl_claim = ClaimRow("public_links", "LinkedIn",
+                         "https://linkedin.com/in/jane-doe", "", 0.8, "pdl")
+    def _boom(*a, **k):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(phase2_enrich, "search_linkedin_candidates", _boom)
+    url, claim = _resolve_linkedin_seed(object(), "key", _PERSON, [pdl_claim])
+    assert url == "https://linkedin.com/in/jane-doe" and claim is None
+
+
+def test_resolve_seed_records_when_pdl_had_no_url(monkeypatch):
+    _stub_search(monkeypatch, [
+        LinkedInCandidate("https://linkedin.com/in/jane-doe", 2.5,
+                          "name,employer", "search")])
+    url, claim = _resolve_linkedin_seed(object(), "key", _PERSON, [])
+    assert url == "https://linkedin.com/in/jane-doe"
+    assert claim is not None and claim.value == url
