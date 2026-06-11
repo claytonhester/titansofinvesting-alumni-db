@@ -69,6 +69,19 @@ def test_build_prompt_includes_qualifiers():
     assert "found=false" in p  # namesake guard instruction
 
 
+def test_build_prompt_with_seed_url_reads_that_profile():
+    url = "https://linkedin.com/in/jane-doe-123"
+    p = build_prompt("Jane Doe", "Acme Capital", "Austin", url)
+    assert "Read this public LinkedIn profile" in p and url in p
+    assert "found=false" in p  # still namesake-guarded on a seeded read
+
+
+def test_build_prompt_without_seed_url_blind_searches():
+    p = build_prompt("Jane Doe", "Acme Capital", "Austin")
+    assert "Find the public LinkedIn profile" in p
+    assert "Read this public LinkedIn profile" not in p
+
+
 def test_map_claims_full_profile():
     data = {
         "found": True,

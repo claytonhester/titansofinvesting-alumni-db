@@ -215,7 +215,7 @@ class LinkedInResult:
 _EMPTY = LinkedInResult(claim_rows=(), found=False, credits_used=0)
 
 
-def build_prompt(name: str, employer: str, city: str) -> str:
+def build_prompt(name: str, employer: str, city: str, profile_url: str = "") -> str:
     who = name.strip()
     qualifiers = []
     if employer and employer.strip() and employer.strip() != "(unknown)":
@@ -223,12 +223,27 @@ def build_prompt(name: str, employer: str, city: str) -> str:
     if city and city.strip() and city.strip() != "(unknown)":
         qualifiers.append(f"based in {city.strip()}")
     tail = (" " + " and ".join(qualifiers)) if qualifiers else ""
+    fields = (
+        "Return their current title, current employer, location, full work "
+        "experience (title, company, start and end years), education (degree and "
+        "school), and the LinkedIn profile URL. "
+    )
+    if profile_url.strip():
+        # We already hold the exact URL (from PDL or a verified mention). Reading a
+        # KNOWN profile is far more reliable than a blind name search — but the
+        # agent must still confirm it's the right person so a stale/wrong URL can't
+        # splice a namesake (the roster verifier downstream re-checks regardless).
+        return (
+            f"Read this public LinkedIn profile: {profile_url.strip()}\n"
+            f"Confirm it belongs to {who}{tail}, an alumnus of a Texas university "
+            f"finance/investing program. {fields}"
+            "Set found=true ONLY if the profile is confidently THIS person (not a "
+            "namesake); otherwise set found=false and leave the other fields empty."
+        )
     return (
         f"Find the public LinkedIn profile for {who}{tail}. They are an alumnus of "
-        "a Texas university finance/investing program. Return their current title, "
-        "current employer, location, full work experience (title, company, start "
-        "and end years), education (degree and school), and the LinkedIn profile "
-        "URL. Set found=true ONLY if you confidently identify THIS person (not a "
+        f"a Texas university finance/investing program. {fields}"
+        "Set found=true ONLY if you confidently identify THIS person (not a "
         "namesake); otherwise set found=false and leave the other fields empty."
     )
 
@@ -328,19 +343,21 @@ def fetch_linkedin(
     *,
     employer: str = "",
     city: str = "",
+    profile_url: str = "",
     timeout: int = 120,
     max_credits: int | None = DEFAULT_MAX_CREDITS,
 ) -> LinkedInResult:
     """Run one Firecrawl agent LinkedIn lookup for a person. Returns mapped claims
-    plus the credits spent. `max_credits` caps the (variable, sometimes spiking)
-    agent spend per call. Propagates PaymentRequiredError (so the caller logs "no
-    credits" like the other Firecrawl passes); swallows every other error to an
-    empty result."""
+    plus the credits spent. When `profile_url` is given the agent reads that exact
+    profile (reliable) instead of blind-searching by name. `max_credits` caps the
+    (variable, sometimes spiking) agent spend per call. Propagates
+    PaymentRequiredError (so the caller logs "no credits" like the other Firecrawl
+    passes); swallows every other error to an empty result."""
     if not name.strip():
         return _EMPTY
     try:
         resp = client.agent(
-            prompt=build_prompt(name, employer, city),
+            prompt=build_prompt(name, employer, city, profile_url),
             schema=_SCHEMA,
             timeout=timeout,
             max_credits=max_credits,
