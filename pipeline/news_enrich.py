@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from anthropic import Anthropic
 
+from directory_hosts import is_non_news_host
 from discovery import NewsDiscoveryResult, Source
 from enrichment_store import ClaimRow
 from structuring import HAIKU_MODEL
@@ -101,6 +102,13 @@ def extract_news_mentions(
     total_in = total_out = 0
 
     for source in news_disc.sources:
+        # Broker/SEO-echo directories and public-records hosts are never news.
+        # The sonar and mention paths already filter these at claim creation;
+        # this path didn't — the hole that let a wwana.com scraper page become
+        # a news_mention claim. Checked before the Claude call: no claim AND
+        # no tokens spent on a page that could never qualify.
+        if is_non_news_host(source.url):
+            continue
         result = _extract_one(anthropic, full_name, company, source)
         if result is None:
             continue

@@ -24,6 +24,7 @@ from directory_hosts import (
     DIRECTORY_HOSTS,
     PUBLIC_RECORDS_HOSTS,
     SOCIAL_HOSTS,
+    is_non_news_host,
     registrable_host,
 )
 from enrichment_store import ClaimRow
@@ -142,6 +143,12 @@ def news_items(claims: list[ClaimRow], name: str = "") -> list[ClaimRow]:
     dropped — these are never articles, regardless of source."""
     items: list[ClaimRow] = []
     for c in claims:
+        # Broker/SEO-echo directories and public-records hosts are never news,
+        # whatever the claim type — a news_mention claim used to skip this gate,
+        # which is how a wwana.com scraper page became a curated row even though
+        # the identity gate had rejected the same host.
+        if is_non_news_host(c.source_url):
+            continue
         _, headline = _split_value(c.value)
         if _is_boilerplate_title(headline):
             continue  # firm/profile boilerplate is never news

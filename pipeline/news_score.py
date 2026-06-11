@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from directory_hosts import NON_NEWS_HOSTS
+
 # Reputable finance / business press + the wires that carry fund and exec news.
 _FINANCE_DOMAINS = frozenset({
     "bloomberg.com", "reuters.com", "wsj.com", "ft.com", "cnbc.com",
@@ -29,7 +31,11 @@ _FINANCE_DOMAINS = frozenset({
 # People-search / data-broker / directory sites: high namesake noise, low
 # editorial value. A name lands on these by SEO, not because the article is
 # about our person — so a hit here is demoted, never "confident".
-_AGGREGATOR_DOMAINS = frozenset({
+# Composed FROM the shared broker/echo core (directory_hosts.NON_NEWS_HOSTS) so
+# a broker known to the identity gate (e.g. wwana.com) is blocked here too — this
+# kept its own drifted copy once, and a wwana.com echo became a news_mention.
+# The local extras below are people-search hosts not (yet) in the shared core.
+_AGGREGATOR_DOMAINS = NON_NEWS_HOSTS | frozenset({
     "idcrawl.com", "officialusa.com", "spokeo.com", "rocketreach.co",
     "zoominfo.com", "datanyze.com", "contactout.com", "signalhire.com",
     "beenverified.com", "thatsthem.com", "peoplefinders.com", "whitepages.com",
