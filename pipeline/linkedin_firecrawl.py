@@ -229,9 +229,11 @@ def build_prompt(name: str, employer: str, city: str, profile_url: str = "") -> 
         qualifiers.append(f"based in {city.strip()}")
     tail = (" " + " and ".join(qualifiers)) if qualifiers else ""
     fields = (
-        "Return their current title, current employer, location, full work "
-        "experience (title, company, start and end years), education (degree and "
-        "school), and the LinkedIn profile URL. "
+        "Return their current title, current employer, location, the COMPLETE "
+        "work experience history (EVERY role, oldest to newest — for each: job "
+        "title, company, and start and end years), education (degree and school), "
+        "and the LinkedIn profile URL. Capture every position shown, not just the "
+        "recent ones. "
     )
     if profile_url.strip():
         # We already hold the exact URL (from PDL or a verified mention). Reading a
@@ -281,16 +283,66 @@ def _claim(claim_type: str, value: str, source_url: str, quote: str) -> ClaimRow
     )
 
 
+# The Firecrawl agent returns INCONSISTENT shapes regardless of the schema we
+# request (confirmed against the orgbase project, which reads LinkedIn the same
+# way). Work history lands under any of these keys, with two per-entry key
+# styles. Parsing only one key (our old bug) silently dropped most roles.
+_EXPERIENCE_KEYS = (
+    "experience", "work_experience", "work_experience_history",
+    "complete_work_experience_history", "positions",
+)
+_EDUCATION_KEYS = ("education", "educations", "education_history")
+_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+
+
+def _first_list(data: dict, keys: tuple[str, ...]) -> list:
+    for k in keys:
+        v = data.get(k)
+        if isinstance(v, list) and v:
+            return v
+    return []
+
+
+def _entry_years(entry: dict) -> tuple[str, str]:
+    """Pull (start, end) 4-digit years from whatever date shape the agent used:
+    explicit start_year/end_year, start_date/end_date, or a 'dates' /
+    'employment_dates' range string ('2018 - Present')."""
+    start = _clean(entry.get("start_year"))[:4]
+    end = _clean(entry.get("end_year"))[:4]
+    if start or end:
+        return start, (end or "present")
+    sd, ed = _clean(entry.get("start_date")), _clean(entry.get("end_date"))
+    if sd or ed:
+        sm = _YEAR_RE.search(sd)
+        s = sm.group(0) if sm else ""
+        if ed.lower() in ("present", "current", "now", ""):
+            e = "present" if ed else ""
+        else:
+            em = _YEAR_RE.search(ed)
+            e = em.group(0) if em else ""
+        if s or e:
+            return s, (e or "present")
+    blob = _clean(entry.get("dates") or entry.get("employment_dates"))
+    if blob:
+        yrs = [m.group(0) for m in _YEAR_RE.finditer(blob)]
+        s = yrs[0] if yrs else ""
+        if any(w in blob.lower() for w in ("present", "current", "now")):
+            e = "present"
+        else:
+            e = yrs[1] if len(yrs) > 1 else ""
+        return s, (e or "present" if s else "")
+    return "", ""
+
+
 def _experience_claim(entry: object, source_url: str) -> ClaimRow | None:
     if not isinstance(entry, dict):
         return None
-    title = _clean(entry.get("title"))
-    company = _clean(entry.get("company"))
+    title = _clean(entry.get("title") or entry.get("job_title"))
+    company = _clean(entry.get("company") or entry.get("company_name"))
     if not title and not company:
         return None
     label = title or company
-    start = _clean(entry.get("start_year"))[:4]
-    end = _clean(entry.get("end_year"))[:4] or "present"
+    start, end = _entry_years(entry)
     if start and company:
         value = f"{label} at {company} ({start}-{end})"
         quote = f"{start} - {end} {label} @ {company}"  # resume.ts parses this first
@@ -303,37 +355,79 @@ def _experience_claim(entry: object, source_url: str) -> ClaimRow | None:
 def _education_claim(entry: object, source_url: str) -> ClaimRow | None:
     if not isinstance(entry, dict):
         return None
-    school = _clean(entry.get("school"))
+    school = _clean(entry.get("school") or entry.get("school_name")
+                    or entry.get("institution"))
     if not school:
         return None
-    degree = _clean(entry.get("degree"))
+    degree = _clean(entry.get("degree") or entry.get("degree_name")
+                    or entry.get("field_of_study"))
     value = f"{degree} from {school}" if degree else school
     return _claim("education", value, source_url, "")
 
 
+def _current_role(data: dict) -> tuple[str, str]:
+    """Current title + employer from any of the shapes the agent emits."""
+    title = _clean(data.get("current_title"))
+    employer = _clean(data.get("current_employer"))
+    wp = data.get("current_workplace")
+    if isinstance(wp, dict):
+        title = title or _clean(wp.get("job_title"))
+        employer = employer or _clean(wp.get("company_name"))
+    cp = data.get("current_position")
+    if isinstance(cp, dict):
+        title = title or _clean(cp.get("most_recent_title"))
+        employer = employer or _clean(cp.get("most_recent_company"))
+    return title, employer
+
+
+def _location(data: dict) -> str:
+    loc = data.get("location")
+    if isinstance(loc, str) and loc.strip():
+        return _clean(loc)
+    for k in ("current_location", "location", "current_residential_location"):
+        o = data.get(k)
+        if isinstance(o, dict):
+            parts = [_clean(o.get("city")), _clean(o.get("state")),
+                     _clean(o.get("country"))]
+            parts = [p for p in parts if p]
+            if parts:
+                return ", ".join(parts)
+    return ""
+
+
+def _profile_url(data: dict) -> str:
+    url = _clean(data.get("linkedin_url"))
+    for k in ("user_profile", "profile"):
+        o = data.get(k)
+        if isinstance(o, dict):
+            url = url or _clean(o.get("linkedin_profile_url") or o.get("linkedin_url"))
+    return url
+
+
 def map_claims(data: dict) -> list[ClaimRow]:
-    """Map a found LinkedIn profile dict onto canonical ClaimRows. Pure — unit
-    tested directly. Returns [] when the agent did not confidently find the person."""
+    """Map a found LinkedIn profile dict onto canonical ClaimRows. Tolerant of the
+    multiple response shapes the Firecrawl agent emits (see _EXPERIENCE_KEYS).
+    Pure — unit tested directly. Returns [] when the agent did not confidently
+    find the person."""
     if not data or not data.get("found"):
         return []
-    url = _clean(data.get("linkedin_url"))
+    url = _profile_url(data)
     source = url if url.startswith("http") else (f"https://{url}" if url else "")
 
     rows: list[ClaimRow] = []
-    title = _clean(data.get("current_title"))
-    employer = _clean(data.get("current_employer"))
-    location = _clean(data.get("location"))
+    title, employer = _current_role(data)
+    location = _location(data)
     if title:
         rows.append(_claim("current_title", title, source, ""))
     if employer:
         rows.append(_claim("current_employer", employer, source, ""))
     if location:
         rows.append(_claim("location", location, source, ""))
-    for entry in data.get("experience") or []:
+    for entry in _first_list(data, _EXPERIENCE_KEYS):
         row = _experience_claim(entry, source)
         if row is not None:
             rows.append(row)
-    for entry in data.get("education") or []:
+    for entry in _first_list(data, _EDUCATION_KEYS):
         row = _education_claim(entry, source)
         if row is not None:
             rows.append(row)
