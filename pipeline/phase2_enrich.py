@@ -438,12 +438,13 @@ def enrich_person(
     # classes; the web-verified employer is missing for exactly the thin
     # profiles that need help). A profile must clear the fail-closed roster
     # verifier before any of its claims are used.
+    # ONLY the explicit LinkedIn-first policies (DEEP/REFRESH) reorder to run the
+    # agent before PDL. Under BULK the agent stays in its original post-PDL
+    # position (the deep-block fallback below) so BULK is behavior-identical to
+    # the pre-rewrite pipeline EXCEPT that its LinkedIn output now passes through
+    # the verifier — a pure safety add, never a reordering or a gating change.
     li_pass = _LI_NOT_ATTEMPTED
-    pre_deep = force_deep_path(policy) or is_high_signal(
-        pdl_matched=False,
-        trusted_count=len(trusted),
-        has_current_employer=bool(_verified_employer),
-    )
+    pre_deep = force_deep_path(policy)
     if pre_deep:
         li_pass = _linkedin_pass(
             conn, firecrawl, anthropic, person,
@@ -596,22 +597,32 @@ def enrich_person(
             and pdl_key
         ):
             print(f"  PDL warm retry: anchor '{li_pass.verified_employer}'")
-            pdl = enrich_pdl(
-                http, pdl_key, person.full_name,
-                li_pass.verified_employer, person.city,
-                school=person.school,
-                cost_usd_per_match=PDL_USD_PER_MATCH,
-            )
-            pdl_usd_total += pdl.cost_usd
-            if pdl.claim_rows:
-                kept_pdl, _rin, _rout = verify_pdl_claims(
-                    anthropic, person.full_name,
+            try:
+                pdl_retry = enrich_pdl(
+                    http, pdl_key, person.full_name,
                     li_pass.verified_employer, person.city,
-                    list(pdl.claim_rows),
+                    school=person.school,
+                    cost_usd_per_match=PDL_USD_PER_MATCH,
                 )
-                pdl_pv_in += _rin
-                pdl_pv_out += _rout
-                claim_rows.extend(kept_pdl)
+            except PdlUnavailable as exc:
+                # Quota exhausted ON THE RETRY: keep the first miss and the
+                # already-collected (verified LinkedIn + web) claims rather than
+                # letting the batch handler roll this person back. The retry is a
+                # best-effort top-up, never load-bearing.
+                print(f"  PDL warm retry: quota exhausted, skipped ({exc})")
+                pdl_retry = None
+            if pdl_retry is not None:
+                pdl = pdl_retry
+                pdl_usd_total += pdl.cost_usd
+                if pdl.claim_rows:
+                    kept_pdl, _rin, _rout = verify_pdl_claims(
+                        anthropic, person.full_name,
+                        li_pass.verified_employer, person.city,
+                        list(pdl.claim_rows),
+                    )
+                    pdl_pv_in += _rin
+                    pdl_pv_out += _rout
+                    claim_rows.extend(kept_pdl)
             pdl_matched = bool(pdl.matched)
 
         # 3. Firecrawl + Claude press/news pass (verified employer/title queries).

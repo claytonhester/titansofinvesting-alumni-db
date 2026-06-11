@@ -255,8 +255,12 @@ def main(argv: list[str] | None = None) -> int:
 
     with connect(Path(args.db)) as conn:
         for person in people:
-            if spent_credits >= args.max_credits:
-                print(f"\nCredit cap {args.max_credits} reached ({spent_credits}). Stopping.")
+            # Pre-check: stop before a person whose worst-case agent cost could
+            # push past the ceiling, so the cap bounds total spend rather than
+            # being breached by one in-flight call.
+            if spent_credits + EST_CREDITS_PER_PERSON > args.max_credits:
+                print(f"\nCredit cap {args.max_credits} reached "
+                      f"(spent {spent_credits}, next could exceed). Stopping.")
                 break
             usd = claude_usd(haiku_in, haiku_out, 0, 0)
             if usd >= args.max_usd:

@@ -238,14 +238,19 @@ def _dated_rank(claim: ClaimRow) -> tuple[int, int, int]:
 def _tiebreak_career(
     d: _Decision, resume: list[ClaimRow], absorbed: list[int]
 ) -> tuple[str, int]:
-    """Deterministic 'dated, recent, complete wins' rule for career groups.
+    """Deterministic 'dated wins' rule for career groups.
 
     The model's prompt allows combining a title from one member with dates from
     another, but in practice it sometimes crowns an undated phrasing — which is
     how refreshed LinkedIn dates got lost behind stale web text (the Bart Howe
-    case). When the canonical value is undated and an absorbed member carries a
-    year range, that member's verbatim value (and provenance) wins instead.
-    Never invents: the substituted value is a member's own text.
+    case). Fix: when the canonical is undated and an absorbed member carries a
+    year range, emit that member's VERBATIM value AND provenance.
+
+    Provenance is only ever routed to a member whose own value EQUALS the value
+    we emit — so the stored quote always attests the displayed value. We never
+    attach a dated member's quote to a blended canonical it doesn't support
+    (the mismatch risk), and the rule is convergent: re-reconciling the output
+    re-derives the same member value, never oscillating.
 
     Returns (canonical_value, primary_index)."""
     best = max(absorbed, key=lambda m: _dated_rank(resume[m]))
@@ -257,13 +262,20 @@ def _tiebreak_career(
     canon_is_dated = canon_start is not None or canon_end is not None
 
     primary = d.primary if d.primary in absorbed else absorbed[0]
+    # Undated canonical + a dated member -> take that member whole (value+source).
     if not canon_is_dated and best_is_dated:
         return resume[best].value, best
-    if best_is_dated:
-        # Canonical keeps the dates; route provenance to the dated member so the
-        # claim's source/quote actually attest the date range it displays.
+    # Dated canonical that IS a member's verbatim value -> route provenance to
+    # that member so the quote attests the dates. A blended canonical (matching
+    # no single member) keeps the model's primary to avoid a quote/value mismatch.
+    if best_is_dated and _norm_value(d.value) == _norm_value(resume[best].value):
         return d.value, best
     return d.value, primary
+
+
+def _norm_value(value: str) -> str:
+    """Casefolded, whitespace-collapsed value for verbatim-equality checks."""
+    return " ".join((value or "").split()).casefold()
 
 
 def _apply(resume: list[ClaimRow], decisions: list[_Decision]) -> list[ClaimRow]:
