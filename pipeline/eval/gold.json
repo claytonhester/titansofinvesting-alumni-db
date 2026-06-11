@@ -1,0 +1,120 @@
+[
+  {
+    "person_id": 25,
+    "full_name": "Grant Larkin",
+    "verified_on": "2026-06-10",
+    "note": "User-verified against the LinkedIn screenshot during the deep pass.",
+    "expect": {
+      "current_employer": "HealthMark Group",
+      "current_title": "Chief Executive Officer",
+      "education": ["Texas A&M", "Harvard Business School"],
+      "linkedin_url": "https://www.linkedin.com/in/bart-howe-ab65115"
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 15,
+    "full_name": "Anika Raval",
+    "verified_on": "2026-06-10",
+    "note": "User-verified during the deep pass (3->18 claims).",
+    "expect": {
+      "current_employer": "AIM7",
+      "current_title": "Chief of Staff",
+      "education": ["London Business School", "Texas A&M"],
+      "linkedin_url": "https://www.linkedin.com/in/payalpatel1002"
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 779,
+    "full_name": "Mateo Ibarra",
+    "verified_on": "2026-06-09",
+    "note": "P0 namesake incident: wwana.com broker echo spliced a Boston-University / Morgan-Stanley / New-York stranger. Remediated to honest-empty. Must never re-accept the broker URL or carry a current role.",
+    "expect": {},
+    "must_reject_urls": ["wwana.com"],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 33,
+    "full_name": "Declan Murtagh",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 744,
+    "full_name": "Oscar Blythe",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 760,
+    "full_name": "Elena Varga",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 858,
+    "full_name": "Hazel Whitcombe",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 770,
+    "full_name": "Owen Thackeray",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 780,
+    "full_name": "Peter Hallam",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — common name, no verifiable footprint. Strong namesake risk.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 817,
+    "full_name": "Dalton Ryder",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 783,
+    "full_name": "Ishani Bose",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  },
+  {
+    "person_id": 842,
+    "full_name": "Mei Tanaka",
+    "verified_on": "2026-06-10",
+    "note": "Confirmed ghost — common name, no verifiable footprint. Strong namesake risk.",
+    "expect": {},
+    "must_reject_urls": [],
+    "must_stay_empty": true
+  }
+]
