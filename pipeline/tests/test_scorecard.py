@@ -22,7 +22,12 @@ from scorecard import (
     regression_category,
     richness_category,
 )
-from scorecard_render import render_table
+from scorecard_render import (
+    FLOORS,
+    best_prior,
+    effective_targets,
+    render_table,
+)
 
 
 def _claim(ct, value, method="firecrawl", url="", quote=""):
@@ -214,6 +219,54 @@ def test_scorecard_jsonl_round_trip(tmp_path, monkeypatch):
 
 
 # --- render --------------------------------------------------------------------
+
+# --- ratcheting targets --------------------------------------------------------
+
+def _run_dict(coverage):
+    return {"categories": {"coverage": {"score": coverage}}}
+
+
+def test_best_prior_is_the_record_to_beat():
+    runs = [_run_dict(70), _run_dict(85), _run_dict(80)]
+    assert best_prior(runs, "coverage") == 85
+    assert best_prior(runs, "accuracy") is None  # never measured
+
+
+def test_effective_target_is_floor_on_first_run():
+    assert effective_targets([])["coverage"] == FLOORS["coverage"]
+
+
+def test_effective_target_ratchets_above_floor():
+    runs = [_run_dict(88)]  # beat the 80 floor
+    assert effective_targets(runs)["coverage"] == 88
+
+
+def test_effective_target_never_drops_below_floor():
+    runs = [_run_dict(50)]  # a bad run can't lower the bar
+    assert effective_targets(runs)["coverage"] == FLOORS["coverage"]
+
+
+def test_identity_floor_is_100():
+    assert FLOORS["identity"] == 100
+
+
+def test_new_best_gets_a_star():
+    run = sc.ScorecardRun(
+        timestamp="2026-06-11T00:00:00+00:00", label="b", n=1,
+        categories={
+            "coverage": _cat("coverage", 90),
+            "accuracy": CategoryScore("accuracy", None, {}),
+            "identity": CategoryScore("identity", None, {}),
+            "richness": _cat("richness", 80),
+            "coherence": _cat("coherence", 100),
+            "corroboration": _cat("corroboration", 35),
+            "cost": _cat("cost", 95),
+        },
+        composite=88, grade="B", gated=False, per_person={},
+    )
+    table = render_table([_run_dict(85)], run, history=4)
+    assert "★" in table  # coverage 90 beats the prior best of 85
+
 
 def test_render_table_marks_current_and_gate():
     run = sc.ScorecardRun(

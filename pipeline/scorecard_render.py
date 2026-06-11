@@ -25,11 +25,42 @@ ROW_ORDER = [
     ("cost", "Cost efficiency"),
 ]
 
-# A loose, human "good enough" target per category for the Target column.
-TARGETS = {
-    "coverage": 80, "accuracy": 90, "identity": 75, "richness": 75,
+# The FLOOR per category: the minimum acceptable bar, owner-set. The bar the
+# table actually shows RATCHETS above this — it's max(floor, your best run so
+# far) — so the standard rises as the pipeline improves and never drops below
+# the floor. Identity and Coherence floor at 100: any namesake leak or impossible
+# date is unacceptable, full stop (both also hard-gate the grade).
+FLOORS = {
+    "coverage": 80, "accuracy": 90, "identity": 100, "richness": 75,
     "coherence": 100, "corroboration": 30, "cost": 90,
 }
+
+# Batches contain different people, so one chunk's score isn't strictly
+# comparable to another's. Absorb that composition noise: a category is only
+# flagged as *below bar* when it falls more than this under the ratcheted target.
+RATCHET_SLACK = 2
+
+
+def best_prior(prior_runs: list[dict], key: str) -> int | None:
+    """The highest score this category has reached in any prior run (the record
+    to beat). None if it was never measured."""
+    scores = [
+        cat["score"]
+        for run in prior_runs
+        for cat in [(run.get("categories") or {}).get(key)]
+        if cat and cat.get("score") is not None
+    ]
+    return max(scores) if scores else None
+
+
+def effective_targets(prior_runs: list[dict]) -> dict[str, int]:
+    """The live bar per category: max(floor, best-so-far). Ratchets up as runs
+    set new records; never below the owner-set floor."""
+    out = {}
+    for key, floor in FLOORS.items():
+        bp = best_prior(prior_runs, key)
+        out[key] = max(floor, bp) if bp is not None else floor
+    return out
 
 
 def _cell(score: int | None) -> str:
@@ -58,24 +89,34 @@ def _delta(current: int | None, prior_runs: list[dict], key: str) -> str:
 def render_table(prior_runs: list[dict], run: "ScorecardRun", *,
                  history: int = 4) -> str:
     cols = prior_runs[-history:] if history else []
+    targets = effective_targets(prior_runs)
     header = ["Category"]
     for c in cols:
         header.append(_short_label(c))
     header.append("► this run")
-    header.append("Target")
+    header.append("Target (best/floor)")
 
     lines = ["| " + " | ".join(header) + " |"]
     lines.append("|" + "|".join(["---"] * len(header)) + "|")
 
     caveats: list[str] = []
+    new_best = False
     for key, label in ROW_ORDER:
         cat: CategoryScore = run.categories[key]
         row = [label]
         for c in cols:
             row.append(_prior_cell(c, key))
         marker = "*" if cat.caveat else ""
-        row.append(f"**{_cell(cat.score)}{marker}**{_delta(cat.score, prior_runs, key)}")
-        row.append(str(TARGETS.get(key, "—")))
+        # ★ when this run sets a new high-water mark for the category.
+        bp = best_prior(prior_runs, key)
+        star = ""
+        if cat.score is not None and (bp is None or cat.score > bp) \
+                and cat.score >= FLOORS.get(key, 0):
+            star = " ★"
+            new_best = True
+        row.append(f"**{_cell(cat.score)}{marker}**"
+                   f"{_delta(cat.score, prior_runs, key)}{star}")
+        row.append(str(targets.get(key, "—")))
         lines.append("| " + " | ".join(row) + " |")
         if cat.caveat:
             caveats.append(f"{label}: {cat.caveat}")
@@ -90,6 +131,8 @@ def render_table(prior_runs: list[dict], run: "ScorecardRun", *,
         lines.append(f"Regression vs prior: {reg.score}/100"
                      f" ({dropped} regressed of {reg.metrics.get('compared', 0)})")
     lines.append(f"Batch: {run.label}  ·  n={run.n}")
+    if new_best:
+        lines.append("★ = new best for that category (the bar ratcheted up)")
 
     if caveats:
         lines.append("")
