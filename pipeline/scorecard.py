@@ -176,17 +176,23 @@ def richness_category(records: list[PersonRecord]) -> CategoryScore:
 
 
 def coherence_category(records: list[PersonRecord]) -> CategoryScore:
-    """Mean per-person coherence; any future-date P0 sets the hard-gate caveat."""
+    """Mean per-person coherence; any future-date P0 sets the hard-gate caveat.
+    Records a per-rule failure breakdown so diagnosis can name the lever."""
     n = len(records)
     now = current_year()
     per = [coherence_report(list(r.claims), r.grad_year, now) for r in records]
     mean = round(sum(p.score for p in per) / n) if n else 100
     clean = sum(1 for p in per if not p.failures)
     p0 = sum(1 for p in per if p.p0)
+    by_rule: dict[str, int] = {}
+    for p in per:
+        for name, _ in p.failures:
+            by_rule[name] = by_rule.get(name, 0) + 1
     caveat = "impossible data (P0)" if p0 else ""
     return CategoryScore(
         "coherence", mean,
-        {"clean": clean, "clean_pct": _pct(clean, n), "p0": p0}, caveat,
+        {"clean": clean, "clean_pct": _pct(clean, n), "p0": p0, "by_rule": by_rule},
+        caveat,
     )
 
 
@@ -535,7 +541,37 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Don't append to scorecard.jsonl")
     p.add_argument("--history", type=int, default=4,
                    help="Prior runs to show as trend columns (default 4)")
+    p.add_argument("--llm", action="store_true",
+                   help="Add a Sonnet narrative 'top 3 fixes' (one paid call)")
     return p
+
+
+def _print_llm_narrative(run: ScorecardRun, diag) -> None:
+    """Optional paid narrative. Imports the SDK lazily so the default path stays
+    LLM-free, and logs the call's cost to cost_log.jsonl."""
+    from anthropic import Anthropic
+
+    from config import require_key
+    from cost_log import append_entry, build_entry
+    from identity import SONNET_MODEL
+    from scorecard_diagnose import llm_narrative
+
+    client = Anthropic(api_key=require_key("ANTHROPIC_API_KEY"))
+    run_json = {
+        "composite": run.composite, "grade": run.grade, "n": run.n,
+        "categories": {k: _category_to_json(v) for k, v in run.categories.items()},
+    }
+    nar = llm_narrative(run_json, diag, client=client, model=SONNET_MODEL)
+    if nar.text:
+        print("\nLLM review:")
+        print(nar.text)
+        append_entry(build_entry(
+            label=f"scorecard-narrative:{run.label}", people=run.n,
+            haiku_in=0, haiku_out=0, sonnet_in=nar.tokens_in,
+            sonnet_out=nar.tokens_out,
+        ))
+    else:
+        print("\n(LLM review unavailable — deterministic diagnosis stands.)")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -559,6 +595,14 @@ def main(argv: list[str] | None = None) -> int:
                           cost_since=cost_since, prior=prior)
 
     print(render_table(prior_runs, run, history=args.history))
+
+    from scorecard_diagnose import diagnose, render_diagnosis
+    diag = diagnose(run)
+    print("\n" + render_diagnosis(diag))
+
+    if args.llm:
+        _print_llm_narrative(run, diag)
+
     if not args.no_save:
         append_run(run)
         print(f"\nSaved to {SCORECARD_LOG.relative_to(DATA_DIR.parent)}")

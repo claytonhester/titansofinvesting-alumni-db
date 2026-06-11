@@ -53,6 +53,16 @@ step "4/5 re-embed (semantic search vectors)" \
 step "5/5 sync pipeline DB -> web snapshot" \
   npm --prefix ../web run sync-db
 
+# Optional 6th step — the batch scorecard (model-card report on this chunk:
+# Coverage/Accuracy/Identity/Richness/Coherence/Corroboration/Cost + trend +
+# cause->lever diagnosis, persisted to data/scorecard.jsonl). Free + deterministic
+# by default. Opt in by setting SCORECARD=1 (add --llm yourself for the paid
+# narrative). Kept off the default path so finalize stays zero-cost.
+if [ "${SCORECARD:-0}" = "1" ]; then
+  step "6/6 batch scorecard (since last run)" \
+    python -u scorecard.py
+fi
+
 echo ""
 echo "===== FINALIZE PASS — DONE $(date) ====="
 echo "Remember to commit web/data/titans.db to ship the refreshed snapshot."
