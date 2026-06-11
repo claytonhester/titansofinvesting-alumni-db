@@ -543,6 +543,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Prior runs to show as trend columns (default 4)")
     p.add_argument("--llm", action="store_true",
                    help="Add a Sonnet narrative 'top 3 fixes' (one paid call)")
+    p.add_argument("--gold-candidates", type=int, nargs="?", const=10,
+                   metavar="N",
+                   help="Don't score — list the top N high-confidence profiles "
+                        "to hand-verify into the gold set (default 10)")
     return p
 
 
@@ -574,8 +578,19 @@ def _print_llm_narrative(run: ScorecardRun, diag) -> None:
         print("\n(LLM review unavailable — deterministic diagnosis stands.)")
 
 
+def _run_gold_candidates(n: int) -> int:
+    from gold_candidates import find_candidates, render_candidates
+    exclude = {g.person_id for g in load_gold()}
+    with connect(DB_PATH) as conn:
+        cands = find_candidates(conn, exclude, limit=n)
+    print(render_candidates(cands))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.gold_candidates is not None:
+        return _run_gold_candidates(args.gold_candidates)
     ids = [int(x) for x in args.ids.split(",") if x.strip()] if args.ids else None
     prior_runs = load_runs()
     prior = prior_runs[-1]["per_person"] if prior_runs else None
