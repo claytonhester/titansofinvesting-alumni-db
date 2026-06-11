@@ -47,15 +47,20 @@ EXTRACTION_METHOD = "firecrawl-linkedin"
 # lookup (namesake risk), so it sits just under a verified PDL likelihood match.
 LINKEDIN_CONFIDENCE = 0.8
 
-# The agent is BILLED and variable. Firecrawl does NOT reliably honor this per-call
-# cap (a call capped at 60 was observed spending 324), so it's best-effort only —
-# the real protection is the pre-flight LinkedInBudget below.
-DEFAULT_MAX_CREDITS = 40
+# The agent is BILLED and variable. max_credits is a CEILING the agent checks
+# UP FRONT: if it estimates the browse will exceed the cap it REFUSES and spends
+# 0 (observed live — a cap of 40 refused every LinkedIn lookup with "Agent
+# reached max credits"). A seeded read of a known profile URL completes for
+# ~126 credits, so the cap must clear that or the finder silently does nothing.
+# Set well above a typical seeded read; a runaway open-ended browse still refuses.
+DEFAULT_MAX_CREDITS = 300
 LINKEDIN_MIN_CAREER = 3
-# Per-person allowance for the run-level agent budget. The agent only pays off on a
-# minority of thin profiles, so a batch budget well under (cost-per-firing × N)
-# caps total spend; the minimum still lets a single-person run fire once.
-AGENT_CREDITS_PER_PERSON = 15
+# Per-person allowance for the run-level agent budget. A real LinkedIn read costs
+# ~126-140 credits, but the agent's pre-flight estimate is variable and refuses
+# (spending 0) when it guesses the job exceeds the cap — so the cap needs headroom
+# above the typical read or reads intermittently no-op. Even so the agent is
+# unreliable: reserve LinkedIn for corroborating a PDL spine, never load-bearing.
+AGENT_CREDITS_PER_PERSON = 200
 
 
 def _current_role_start_year_from_claims(claims) -> int | None:
