@@ -154,8 +154,22 @@ def _load_targets(
     titan_class: int | None = None,
     school: str | None = None,
     ids: list[int] | None = None,
+    needs_deep: bool = False,
 ) -> list[Person]:
-    if ids:
+    if needs_deep:
+        # The deep pass of the two-pass run: people the base sweep flagged as
+        # still-thin (person_insights.needs_deep_search=1). Like --ids, this is a
+        # targeted re-research pass, so it deliberately re-runs already-done
+        # people (replace_* rebuilds their profile). The flag self-clears at the
+        # next finalize once a profile is rich, so the queue drains.
+        rows = conn.execute(
+            "SELECT p.id, p.full_name, p.initial_company, p.city, p.school, "
+            "p.titan_class FROM people p "
+            "JOIN person_insights pi ON pi.person_id = p.id "
+            "WHERE pi.needs_deep_search = 1 ORDER BY p.id LIMIT ?",
+            (limit,),
+        ).fetchall()
+    elif ids:
         # Explicit person IDs: a targeted (re-)research pass. Deliberately does NOT
         # exclude already-done people — re-running rebuilds their profile via the
         # replace_* persistence, which is the point of a deep pass.
@@ -595,6 +609,20 @@ def enrich_person(
         pdl_dropped = n_before - len(kept_pdl)
         claim_rows.extend(kept_pdl)
 
+    # Resolve the LinkedIn URL the human way — search "name + school + employer"
+    # and reconcile against PDL's guess — for EVERY person, BEFORE the Firecrawl
+    # gate. This is a cheap Perplexity call (off the Firecrawl budget), so it
+    # runs even on a zero-credit base sweep: the corrected URL is found, recorded
+    # as a claim, and stashed as the seed for any later (deferred) deep read. The
+    # actual Firecrawl page-read stays inside the deep block below.
+    li_seed_url, li_seed_claim = _resolve_linkedin_seed(
+        http, perplexity_key, person, claim_rows,
+        verified_employer=li_pass.verified_employer or _verified_employer,
+    )
+    if li_seed_claim is not None:
+        claim_rows.append(li_seed_claim)
+        print(f"  LinkedIn search: corrected seed → {li_seed_url}")
+
     # === DEEP FIRECRAWL TOP-UP (high-signal only, under the run credit ceiling) ===
     # Baseline ran on free Jina. Firecrawl's billed calls are reserved for people who
     # warrant them: a confident PDL match, or real verified web presence. A thin,
@@ -665,17 +693,9 @@ def enrich_person(
         #    URL (usually surfaced by PDL): read THAT exact profile. A known-URL
         #    read is far more reliable than the blind name search that just missed
         #    — and even on a PDL-complete profile it corroborates the résumé. Same
-        #    verified path; charges both ceilings inside the helper.
-        # Resolve the seed via the human search method (name + school +
-        # employer) reconciled against PDL's guess — this catches PDL's wrong
-        # slugs and records the corrected URL even if the read below fails.
-        li_seed_url, li_seed_claim = _resolve_linkedin_seed(
-            http, perplexity_key, person, claim_rows,
-            verified_employer=li_pass.verified_employer or _verified_employer,
-        )
-        if li_seed_claim is not None:
-            claim_rows.append(li_seed_claim)
-            print(f"  LinkedIn search: corrected seed → {li_seed_url}")
+        #    verified path; charges both ceilings inside the helper. The seed URL
+        #    was already resolved + recorded above (base flow), so the read just
+        #    consumes it — no second Perplexity search here.
         if (not li_pass.attempted) or (not li_pass.verified_employer and li_seed_url):
             _li_role_start = (
                 pdl.attributes.current_role_start_year
@@ -1030,7 +1050,13 @@ def run(
     ids: list[int] | None = None,
     no_pdl: bool = False,
     policy: ResearchPolicy = ResearchPolicy.BULK,
+    needs_deep: bool = False,
 ) -> int:
+    # The deep pass targets base-sweep-flagged people and re-researches them
+    # aggressively — force REFRESH so the LinkedIn read fires on the corrected
+    # URL even for complete-looking profiles (the whole point of the second pass).
+    if needs_deep:
+        policy = ResearchPolicy.REFRESH
     firecrawl = Firecrawl(api_key=require_key("FIRECRAWL_API_KEY"))
     anthropic = Anthropic(api_key=require_key("ANTHROPIC_API_KEY"))
 
@@ -1048,7 +1074,7 @@ def run(
         init_person_insights_schema(conn)
         init_person_company_schema(conn)
         init_news_schema(conn)
-        people = _load_targets(conn, limit, name, titan_class, school, ids)
+        people = _load_targets(conn, limit, name, titan_class, school, ids, needs_deep)
         if not people:
             print("Nothing to enrich (all targets done or none matched).", file=sys.stderr)
             return 1
@@ -1196,6 +1222,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "for complete-looking profiles)")
     p.add_argument("--force-deep", dest="force_deep", action="store_true",
                    help="DEPRECATED alias for --policy deep")
+    p.add_argument("--needs-deep", dest="needs_deep", action="store_true",
+                   help="Deep pass: target people the base sweep flagged "
+                        "(person_insights.needs_deep_search=1). Forces --policy "
+                        "refresh and bypasses the done-check")
     return p
 
 
@@ -1223,7 +1253,7 @@ def main(argv: list[str] | None = None) -> int:
     return run(limit=args.limit, name=args.name,
                titan_class=args.titan_class, school=args.school,
                max_credits=args.max_credits, ids=_parse_ids(args.ids),
-               no_pdl=args.no_pdl, policy=policy)
+               no_pdl=args.no_pdl, policy=policy, needs_deep=args.needs_deep)
 
 
 if __name__ == "__main__":
