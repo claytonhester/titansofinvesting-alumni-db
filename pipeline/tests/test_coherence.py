@@ -85,6 +85,30 @@ def test_employer_in_history_noop_without_history():
     assert ok
 
 
+def test_employer_in_history_allows_concurrent_roles():
+    # The Will Carpenter case: current employer (TRS) is one of several concurrent
+    # open-ended roles. A later-started board/adjunct role must NOT flag it.
+    claims = [
+        _emp("Teacher Retirement System of Texas"),
+        _career("Director at Teacher Retirement System of Texas (2020-present)"),
+        _career("Senior Fellow at Council on Foreign Relations (2022-present)"),
+        _career("Adjunct Professor at UT Austin (2017-present)"),
+    ]
+    ok, _ = current_employer_in_history(claims)
+    assert ok
+
+
+def test_employer_in_history_flags_current_absent_from_active_roles():
+    # Current employer is in NONE of the active roles -> genuinely incoherent.
+    claims = [
+        _emp("Mystery Corp"),
+        _career("Director at Acme (2020-present)"),
+        _career("Advisor at Globex (2021-present)"),
+    ]
+    ok, detail = current_employer_in_history(claims)
+    assert not ok and "not among active roles" in detail
+
+
 # --- suffix-tolerant employer match --------------------------------------------
 
 def test_employer_in_history_tolerates_corp_suffix():
