@@ -171,9 +171,67 @@ def _role_records_for_person(
         RoleRecord(m["title"], m["employer"], m["start"], m["end"], m["current"])
         for m in merged.values()
     ]
+    records = _consolidate(records)
     # Timeline order: by start year ascending, undated roles last.
     records.sort(key=lambda r: (r.start_year is None, r.start_year or 0))
     return records
+
+
+_FILLER = frozenset({"of", "the", "and", "for", "a", "an", "to", "in"})
+
+
+def _title_key(title: str) -> str:
+    """Loose grouping key: lowercase, strip punctuation + filler words. Collapses
+    'EVP of Asset Management' and 'EVP - Asset Management' to the same key so
+    punctuation-only variants of one role merge. Used ONLY for grouping; the
+    displayed title keeps its original form."""
+    import re as _re
+    words = _re.sub(r"[^a-z0-9]+", " ", title.lower()).split()
+    return " ".join(w for w in words if w not in _FILLER)
+
+
+def _employers_compatible(a: str, b: str) -> bool:
+    """Same role split across sources when one side has no employer, or one
+    employer string contains the other ('stephens' vs 'stephens inc')."""
+    a, b = _norm(a), _norm(b)
+    return not a or not b or a in b or b in a
+
+
+def _merge_records(rich: RoleRecord, other: RoleRecord) -> RoleRecord:
+    """Fold `other`'s dates into `rich`. CRUCIAL: keep rich's (title, employer)
+    AS A PAIR — that pair was classified, so its cache lookup will hit. Mixing a
+    title from one record with an employer from another could form a pair that
+    was never classified and would blank the level. Only dates/current merge."""
+    start = min([s for s in (rich.start_year, other.start_year) if s is not None], default=None)
+    is_current = rich.is_current or other.is_current
+    if is_current or rich.end_year is None or other.end_year is None:
+        end = None
+    else:
+        end = max(rich.end_year, other.end_year)
+    return RoleRecord(rich.title, rich.employer, start, end, is_current)
+
+
+def _consolidate(records: list[RoleRecord]) -> list[RoleRecord]:
+    """Collapse near-duplicate roles (identical normalized title, compatible
+    employer) into one timeline entry. Same title at genuinely different
+    employers is preserved — only compatible employers merge."""
+    by_title: dict[str, list[RoleRecord]] = {}
+    for r in records:
+        by_title.setdefault(_title_key(r.title), []).append(r)
+
+    out: list[RoleRecord] = []
+    for group in by_title.values():
+        # Richer employer first, so merges fold into the most complete record.
+        kept: list[RoleRecord] = []
+        for r in sorted(group, key=lambda x: len(_norm(x.employer)), reverse=True):
+            for i, k in enumerate(kept):
+                if _employers_compatible(k.employer, r.employer):
+                    kept[i] = _merge_records(k, r)
+                    break
+            else:
+                kept.append(r)
+        out.extend(kept)
+    return out
 
 
 def main() -> None:
