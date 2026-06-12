@@ -5,20 +5,37 @@ import path from "node:path";
 // The pipeline owns all writes. The web app opens the SAME SQLite file
 // strictly READ-ONLY — it must never mutate the research database.
 //
-// Path resolution (in priority order) so the app runs both locally and on a
-// serverless host where the repo's pipeline/ dir is NOT in the deployment:
+// Path resolution searches an ordered list of candidates so the app runs both
+// locally and on a serverless host where pipeline/ is NOT deployed. The tricky
+// part is WHERE the bundled DB lands on Vercel: Next forces the file-tracing
+// ROOT to the repo root (/vercel/path0) even though the app lives in web/, so
+// the include traced via next.config can land at either `<cwd>/data/titans.db`
+// or `<cwd>/web/data/titans.db` depending on which root was in effect. We probe
+// both layouts (plus the local pipeline copy) and use the first that exists.
 //   1. TITANS_DB_PATH env override (explicit wins).
-//   2. ./data/titans.db — the snapshot bundled INTO web/ at build time
-//      (see scripts/sync-db.mjs + next.config outputFileTracingIncludes).
-//      This is the only copy that ships to Vercel.
-//   3. ../pipeline/data/titans.db — local dev fallback when the bundle step
-//      hasn't run yet, reading the pipeline's live working copy directly.
+//   2. <cwd>/data/titans.db          — bundle when tracing root == web/
+//   3. <cwd>/web/data/titans.db      — bundle when tracing root == repo root
+//   4. <cwd>/../pipeline/data/...    — local dev fallback (pre-sync)
 function resolveDbPath(): string {
   const override = process.env.TITANS_DB_PATH;
   if (override) return override;
-  const bundled = path.join(process.cwd(), "data", "titans.db");
-  if (fs.existsSync(bundled)) return bundled;
-  return path.join(process.cwd(), "..", "pipeline", "data", "titans.db");
+
+  const candidates = [
+    path.join(process.cwd(), "data", "titans.db"),
+    path.join(process.cwd(), "web", "data", "titans.db"),
+    path.join(process.cwd(), "..", "pipeline", "data", "titans.db"),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  // Nothing found — surface cwd + everything we tried so the serverless log
+  // shows exactly where the bundle ended up (or didn't) instead of a bare
+  // "unable to open database file".
+  console.error(
+    `[titans] DB not found. cwd=${process.cwd()} tried=${candidates.join(", ")}`,
+  );
+  return candidates[0];
 }
 
 let _db: Database.Database | null = null;
