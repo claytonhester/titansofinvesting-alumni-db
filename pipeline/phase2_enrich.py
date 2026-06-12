@@ -374,11 +374,17 @@ def _resolve_linkedin_seed(
     if not chosen:
         return pdl_url, None
     corrected: ClaimRow | None = None
-    # Record the chosen URL only when search CHANGED PDL's guess (or PDL had
-    # none) — an unchanged confirmation is already on file as PDL's own claim.
-    if "overrides" in reason or "best search" in reason or (
-        not pdl_url and chosen
-    ):
+    # Record the chosen URL as a claim ONLY when (a) it is strongly corroborated
+    # (search named the person AND employer/school — the "overrides"/"search ("
+    # reasons, score >= min_corroboration) AND (b) the person has at least one
+    # verified claim to anchor it. Both halves are batch-1 gate findings
+    # (2026-06-11): weak "best search" picks put namesake URLs on ghosts, and a
+    # "strong" hit can be an SEO namesake echo (Ricardo Lopez + JP Morgan) that
+    # only LOOKS corroborated — with zero verified footprint there is nothing to
+    # anchor the guess against. Any pick may still SEED a read attempt (the
+    # fail-closed verifier judges it there); it just isn't persisted as fact.
+    strongly_corroborated = "overrides" in reason or reason.startswith("search (")
+    if strongly_corroborated and claim_rows:
         corrected = ClaimRow(
             claim_type="linkedin_url",
             value=chosen,

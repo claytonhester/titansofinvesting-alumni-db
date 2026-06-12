@@ -267,10 +267,37 @@ def test_resolve_seed_falls_back_to_pdl_on_search_outage(monkeypatch):
     assert url == "https://linkedin.com/in/jane-doe" and claim is None
 
 
-def test_resolve_seed_records_when_pdl_had_no_url(monkeypatch):
+def test_resolve_seed_records_strong_find_when_person_has_claims(monkeypatch):
+    """No PDL URL but a strongly-corroborated find AND a verified footprint to
+    anchor it -> recorded."""
+    anchor = ClaimRow("current_employer", "JP Morgan", "https://x", "", 0.9, "web")
     _stub_search(monkeypatch, [
         LinkedInCandidate("https://linkedin.com/in/jane-doe", 2.5,
                           "name,employer", "search")])
-    url, claim = _resolve_linkedin_seed(object(), "key", _PERSON, [])
+    url, claim = _resolve_linkedin_seed(object(), "key", _PERSON, [anchor])
     assert url == "https://linkedin.com/in/jane-doe"
     assert claim is not None and claim.value == url
+
+
+def test_resolve_seed_never_persists_for_ghost_with_zero_claims(monkeypatch):
+    """The Ricardo Lopez gate finding: a 'strong' hit can be an SEO namesake echo.
+    With ZERO verified claims there is nothing to anchor the guess — seed it for
+    the verifier, but never persist it as a claim."""
+    _stub_search(monkeypatch, [
+        LinkedInCandidate("https://linkedin.com/in/ricardo-lopez-12281045", 2.5,
+                          "name,slug,employer", "search")])
+    url, claim = _resolve_linkedin_seed(object(), "key", _PERSON, [])
+    assert url == "https://linkedin.com/in/ricardo-lopez-12281045"  # still seeds
+    assert claim is None  # never persisted
+
+
+def test_resolve_seed_never_persists_weak_best_search(monkeypatch):
+    """A weak single-anchor 'best search' pick (score < 2) seeds but is not
+    recorded, even when the person has claims."""
+    anchor = ClaimRow("current_employer", "JP Morgan", "https://x", "", 0.9, "web")
+    _stub_search(monkeypatch, [
+        LinkedInCandidate("https://linkedin.com/in/jane-doe-9999", 1.0,
+                          "name", "search")])
+    url, claim = _resolve_linkedin_seed(object(), "key", _PERSON, [anchor])
+    assert url == "https://linkedin.com/in/jane-doe-9999"
+    assert claim is None
