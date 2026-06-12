@@ -79,3 +79,32 @@ def test_no_flag_means_empty_queue():
     conn.execute("UPDATE person_insights SET needs_deep_search=0")
     conn.commit()
     assert _load_targets(conn, limit=10, name=None, needs_deep=True) == []
+
+
+# --- --rerun-enriched selector (complete rebuild of already-enriched people) -----
+
+def test_rerun_enriched_loads_all_with_insights():
+    """All three have a person_insights row (enriched) and are 'done' — rerun must
+    return every one regardless of flag or done status."""
+    conn = _conn()
+    people = _load_targets(conn, limit=10, name=None, rerun_enriched=True)
+    assert {p.id for p in people} == {1, 2, 3}
+
+
+def test_rerun_enriched_respects_limit():
+    conn = _conn()
+    people = _load_targets(conn, limit=2, name=None, rerun_enriched=True)
+    assert [p.id for p in people] == [1, 2]  # ordered by id, for batched reruns
+
+
+def test_rerun_enriched_skips_never_enriched():
+    """A person with NO person_insights row (never enriched) is not a rerun
+    target — rerun is for rebuilding existing, flawed profiles only."""
+    conn = _conn()
+    conn.execute(
+        "INSERT INTO people (id, full_name, name_slug, titan_class, school, "
+        "initial_company, city, source_url, raw_entry) VALUES "
+        "(99, 'Fresh', 'fresh', 9, 'A&M', 'Co', 'Austin', 'http://x', 'raw')")
+    conn.commit()
+    people = _load_targets(conn, limit=10, name=None, rerun_enriched=True)
+    assert 99 not in {p.id for p in people}

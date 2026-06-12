@@ -155,8 +155,21 @@ def _load_targets(
     school: str | None = None,
     ids: list[int] | None = None,
     needs_deep: bool = False,
+    rerun_enriched: bool = False,
 ) -> list[Person]:
-    if needs_deep:
+    if rerun_enriched:
+        # Complete rebuild of everyone already enriched (has a person_insights
+        # row), on the current pipeline. Like --ids, bypasses the done-check;
+        # replace_* semantics wipe each profile and rebuild it from scratch — the
+        # fix for dev-era enrichments built on now-superseded pipeline versions.
+        rows = conn.execute(
+            "SELECT p.id, p.full_name, p.initial_company, p.city, p.school, "
+            "p.titan_class FROM people p "
+            "JOIN person_insights pi ON pi.person_id = p.id "
+            "ORDER BY p.id LIMIT ?",
+            (limit,),
+        ).fetchall()
+    elif needs_deep:
         # The deep pass of the two-pass run: people the base sweep flagged as
         # still-thin (person_insights.needs_deep_search=1). Like --ids, this is a
         # targeted re-research pass, so it deliberately re-runs already-done
@@ -308,6 +321,11 @@ class _LinkedInPass:
 
 
 _LI_NOT_ATTEMPTED = _LinkedInPass((), "", 0, 0, 0, False)
+
+# Fail-closed circuit breaker: abort a batch after this many generic errors in a
+# row (a systemic failure, not one bad profile). 3 tolerates isolated blips while
+# catching a real outage fast.
+MAX_CONSECUTIVE_ERRORS = 3
 
 _LINKEDIN_IN_RE = re.compile(r"https?://[^\s)\"']*linkedin\.com/in/[^\s)\"']+", re.I)
 
@@ -1051,6 +1069,7 @@ def run(
     no_pdl: bool = False,
     policy: ResearchPolicy = ResearchPolicy.BULK,
     needs_deep: bool = False,
+    rerun_enriched: bool = False,
 ) -> int:
     # The deep pass targets base-sweep-flagged people and re-researches them
     # aggressively — force REFRESH so the LinkedIn read fires on the corrected
@@ -1074,7 +1093,8 @@ def run(
         init_person_insights_schema(conn)
         init_person_company_schema(conn)
         init_news_schema(conn)
-        people = _load_targets(conn, limit, name, titan_class, school, ids, needs_deep)
+        people = _load_targets(conn, limit, name, titan_class, school, ids,
+                               needs_deep, rerun_enriched)
         if not people:
             print("Nothing to enrich (all targets done or none matched).", file=sys.stderr)
             return 1
@@ -1103,6 +1123,12 @@ def run(
         sonar_usd = 0.0
         processed = 0
         pdl_exhausted = False
+        # Fail-closed circuit breaker: N generic errors in a row almost always
+        # means a systemic failure (an API down, an auth problem) rather than one
+        # bad profile — stop the batch instead of churning every remaining person
+        # into an error mark. Resets on any success.
+        consecutive_errors = 0
+        aborted_systemic = False
 
         with httpx.Client(timeout=30.0) as http:
             for person in people:
@@ -1134,6 +1160,7 @@ def run(
                     sonar_requests += usage.sonar_requests
                     sonar_usd += usage.sonar_usd
                     processed += 1
+                    consecutive_errors = 0  # a success clears the breaker
                 except PaymentRequiredError:
                     # No Firecrawl credits — abort the entire run immediately.
                     # Continuing would just re-raise for every remaining person.
@@ -1158,7 +1185,7 @@ def run(
                     )
                     pdl_exhausted = True
                     break
-                except Exception as exc:  # noqa: BLE001 - record and continue the batch
+                except Exception as exc:  # noqa: BLE001 - record and maybe continue
                     conn.rollback()
                     mark_phase(
                         conn, person.id, PHASE_STRUCTURING, "error",
@@ -1166,6 +1193,19 @@ def run(
                     )
                     conn.commit()
                     print(f"  ERROR: {exc}", file=sys.stderr)
+                    consecutive_errors += 1
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        aborted_systemic = True
+                        print(
+                            f"\n\nABORTED — {consecutive_errors} errors in a row "
+                            "(likely a systemic failure: an API down or an auth "
+                            "problem, not one bad profile). Stopping cleanly so we "
+                            "don't churn the rest into errors. No partial data was "
+                            "saved (each failed person was rolled back). Fix the "
+                            "cause and re-run — completed people are skipped.",
+                            file=sys.stderr,
+                        )
+                        break
 
     credits_after = remaining_credits(firecrawl)
     if ids:
@@ -1203,9 +1243,13 @@ def run(
                 f"across {processed} people "
                 f"({fc_news_credits} Firecrawl credits)"
             )
-    # Exit 3 signals PDL-quota stop so a multi-cohort runner can break the sequence
-    # instead of re-hitting the exhausted quota on every following cohort.
-    return 3 if pdl_exhausted else 0
+    # Non-zero exits signal a hard stop so a wrapper/operator halts the sequence
+    # instead of marching on: 3 = PDL quota spent, 4 = systemic error abort.
+    if pdl_exhausted:
+        return 3
+    if aborted_systemic:
+        return 4
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1235,6 +1279,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Deep pass: target people the base sweep flagged "
                         "(person_insights.needs_deep_search=1). Forces --policy "
                         "refresh and bypasses the done-check")
+    p.add_argument("--rerun-enriched", dest="rerun_enriched", action="store_true",
+                   help="Complete rebuild of everyone already enriched (has a "
+                        "person_insights row), bypassing the done-check. Pair with "
+                        "--max-credits 0 for a base-sweep rebuild")
     return p
 
 
@@ -1262,7 +1310,8 @@ def main(argv: list[str] | None = None) -> int:
     return run(limit=args.limit, name=args.name,
                titan_class=args.titan_class, school=args.school,
                max_credits=args.max_credits, ids=_parse_ids(args.ids),
-               no_pdl=args.no_pdl, policy=policy, needs_deep=args.needs_deep)
+               no_pdl=args.no_pdl, policy=policy, needs_deep=args.needs_deep,
+               rerun_enriched=args.rerun_enriched)
 
 
 if __name__ == "__main__":
