@@ -8,7 +8,7 @@
     "predev": "node scripts/sync-db.mjs",
     "prebuild": "node scripts/sync-db.mjs",
     "dev": "next dev -p 3210",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start -p 3210",
     "lint": "eslint .",
     "test": "vitest run",
