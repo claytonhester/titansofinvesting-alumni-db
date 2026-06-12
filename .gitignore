@@ -19,11 +19,6 @@ pipeline/data/*.db-wal
 pipeline/data/*.db-shm
 pipeline/data/cache/
 
-# Cleaned source datasets (the scraped roster + enriched export). These hold the
-# full alumni PII corpus — generated, NOT committed to this public repo.
-pipeline/data/*.csv
-pipeline/data/*.jsonl
-
 # Ad-hoc run logs and probe output (scraped names/results; regenerated per run)
 pipeline/data/run_*.log
 pipeline/data/sonar_*.txt
@@ -42,9 +37,7 @@ pipeline/data/news_experiment.md
 pipeline/data/snapshots/*
 !pipeline/data/snapshots/.gitkeep
 
-# Bundled DB — the enriched alumni database (full PII). NOT committed to this
-# public repo; supplied at deploy time from a private source / local build.
-web/data/*.db
+# Bundled DB sidecars — commit only web/data/titans.db, never its WAL files
 web/data/*.db-shm
 web/data/*.db-wal
 web/data/*.db-journal
