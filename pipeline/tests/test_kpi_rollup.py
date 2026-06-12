@@ -116,17 +116,34 @@ def test_reached_senior_stats_fair_shot():
     assert num == 1 and den == 2 and pct == 50
 
 
-def test_manager_tile_present_with_avg_years():
+def test_manager_tile_fair_shot_and_avg_years():
     people = [
         _p(1, grad=2010, mgr=True, ytmgr=4),
         _p(2, grad=2012, mgr=True, ytmgr=6),
-        _p(3, grad=2024, mgr=False),
+        _p(3, grad=2024, mgr=False),  # recent grad, no fair shot -> excluded
     ]
     stats = kpi_signature_stats(people, snapshot_year=2026)
     by_key = {s.key: s for s in stats}
     assert "reached_manager" in by_key
-    assert by_key["reached_manager"].value == "67%"  # 2/3
+    assert by_key["reached_manager"].value == "100%"  # 2/2 fair-shot, not 2/3
     assert "5 yrs" in by_key["reached_manager"].detail  # avg(4,6)
+
+
+def test_management_pct_never_below_senior_pct():
+    # The bug we fixed: management is the LOWER rung (reached_senior subset of
+    # reached_manager), so on the shared fair-shot basis management% must be >=
+    # senior%. A mixed denominator inverted them (78% senior > 67% manager).
+    people = [
+        _p(1, grad=2008, mgr=True, senior=True),   # senior (also manager)
+        _p(2, grad=2010, mgr=True, senior=True),   # senior
+        _p(3, grad=2012, mgr=True, senior=False),  # manager only
+        _p(4, grad=2014, mgr=True, senior=False),  # manager only
+        _p(5, grad=2009, mgr=False, senior=False), # fair shot, reached neither
+    ]
+    stats = {s.key: s for s in kpi_signature_stats(people, snapshot_year=2026)}
+    mgr_pct = int(stats["reached_manager"].value.rstrip("%"))
+    sen_pct = int(stats["reached_senior_leadership"].value.rstrip("%"))
+    assert mgr_pct >= sen_pct
 
 
 def test_avg_years_to_senior():
