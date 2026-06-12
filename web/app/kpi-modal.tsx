@@ -20,7 +20,6 @@ const TAB_LABEL: Record<string, string> = {
   still_first_firm: "First firm",
   grad_degree: "Grad degree",
   years_to_senior_leadership: "Years to senior",
-  reached_manager: "Management",
   tenure: "Tenure",
   left_texas: "Left Texas",
 };

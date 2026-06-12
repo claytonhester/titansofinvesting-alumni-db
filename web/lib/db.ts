@@ -861,7 +861,6 @@ export const KPI_KEYS = [
   "still_first_firm",
   "grad_degree",
   "years_to_senior_leadership",
-  "reached_manager",
   "tenure",
   "left_texas",
 ] as const;
@@ -885,7 +884,6 @@ const KPI_QUERY: Record<KpiKey, { where: string; orderBy: string }> = {
     where: "pi.years_to_senior_leadership IS NOT NULL",
     orderBy: "pi.years_to_senior_leadership ASC, p.full_name",
   },
-  reached_manager: { where: "pi.reached_manager = 1", orderBy: "p.full_name" },
   tenure: { where: "pi.tenure_years IS NOT NULL", orderBy: "pi.tenure_years DESC, p.full_name" },
   left_texas: { where: "pi.left_texas = 1", orderBy: "p.full_name" },
 };
@@ -914,7 +912,6 @@ function kpiDetail(key: KpiKey, r: KpiRow): string {
   switch (key) {
     case "buy_side":
     case "reached_senior_leadership":
-    case "reached_manager":
     case "grad_degree":
       return joinRoleFirm(r.title, r.employer);
     case "founder_partner":
