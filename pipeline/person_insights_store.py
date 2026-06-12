@@ -120,6 +120,19 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         # the read can't lift won't re-flag and re-burn ~$0.30/run forever. An
         # operator resets it to 0 to force a deliberate re-sweep.
         "deep_search_done": "INTEGER NOT NULL DEFAULT 0",
+        # Cross-industry seniority (seniority_v2). The derived rung + the two
+        # product thresholds, computed from the role_level_cache. These live
+        # ALONGSIDE the legacy reached_md / years_to_md (which stay untouched for
+        # the existing web) — the public title is never overwritten; this is a
+        # separate normalized tag. level_version stamps which ladder produced
+        # them so a ladder change is auditable and forces a clean recompute.
+        "peak_level": "TEXT NOT NULL DEFAULT ''",
+        "reached_manager": "INTEGER NOT NULL DEFAULT 0",
+        "reached_senior_leadership": "INTEGER NOT NULL DEFAULT 0",
+        "years_to_manager": "INTEGER",
+        "years_to_senior_leadership": "INTEGER",
+        "level_model": "TEXT NOT NULL DEFAULT ''",
+        "level_version": "INTEGER NOT NULL DEFAULT 0",
     }
     for col, decl in additive.items():
         if col not in have:
