@@ -194,7 +194,7 @@ def kpi_signature_stats(
         SignatureStat(
             label="Reached senior leadership",
             value=f"{sl_pct}%",
-            detail=f"of those already there or {md_years}+ years out",
+            detail=f"among alumni {md_years}+ years into their careers",
             pct=sl_pct,
             key="reached_senior_leadership",
         ),
