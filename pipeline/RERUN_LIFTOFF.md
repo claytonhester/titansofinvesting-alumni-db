@@ -1,29 +1,28 @@
-# Liftoff runbook — complete rerun of already-enriched alumni
+# Liftoff runbook — targeted rerun of the struggling profiles
 
-Rebuild every already-enriched person (~110) on the **current** pipeline, because
-their data was built by volatile dev-era versions (pre-PDL, pre-search-URL,
-pre-reconciler, pre-identity-hardening). Then deep-pass the thin survivors.
+Rebuild only the already-enriched profiles a quality triage flags as struggling
+(built on volatile dev-era versions: pre-PDL, pre-search-URL, pre-reconciler).
+The triage (2026-06-11) found only **34 of 110 need it** — 26 are SOLID and 50
+are GOOD, so we leave 76 alone. The 34 fit the current budget (~$14) with no
+top-up. Then deep-pass the thin survivors.
 
 All commands run from `pipeline/` with the venv active: `source .venv/bin/activate`.
 **Nothing here has been run yet.** Wait until you're ready, then go top to bottom.
 
 ---
 
-## 0. Pre-flight (read-only — spends nothing)
+## 0. Triage + pre-flight (read-only — spends nothing)
 
 ```bash
-python preflight.py
+python profile_triage.py          # see the SOLID/GOOD/WEAK/BROKEN breakdown
+python preflight.py               # must print === GO ===
+python -m pytest tests -q         # expect: 760 passed
 ```
-Must print **`=== GO ===`**. It checks: required keys present, a DB backup exists,
-Firecrawl balance, target count (~110) and the ~$44 cost estimate. If NO-GO, fix
-the `✗` line (usually: make a backup) and re-run.
+`profile_triage.py` grades every profile on completeness, coherence,
+corroboration, and PDL spine. The **rerun set = WEAK+BROKEN**. Eyeball it; if a
+SOLID/GOOD person actually looks wrong, you can add them by id in step 2.
 
-Also confirm the suite is green:
-```bash
-python -m pytest tests -q          # expect: 750 passed
-```
-
-## 1. Back up the DB (if preflight flagged it)
+## 1. Back up the DB
 
 ```bash
 cp data/titans.db "data/titans.backup.$(date +%F)-prererun.db"
@@ -31,23 +30,25 @@ cp data/titans.db "data/titans.backup.$(date +%F)-prererun.db"
 The web app reads the *synced* `web/data/titans.db`, so nothing below goes live
 until step 6. Pipeline runs only touch `pipeline/data/titans.db`.
 
-## 2. Base-sweep rebuild of all enriched people (PDL + URL + news, $0 Firecrawl)
+## 2. Rebuild the struggling profiles (PDL + URL + news, $0 Firecrawl)
 
 ```bash
-python phase2_enrich.py --rerun-enriched --limit 200 --max-credits 0
+python phase2_enrich.py --ids "$(python profile_triage.py --rerun-ids)" --max-credits 0
 ```
+- Reruns exactly the WEAK+BROKEN set (~34). Add `--include-good` to the inner
+  command to also rebuild GOOD; or hand-edit the id list.
 - `--max-credits 0` → **zero Firecrawl** (no flaky reads here; deferred to step 4).
-- `--limit 200` covers all ~110. Each person commits before the next (resumable-ish).
+- Budget: ~$14 (well under PDL 86cr / Claude $3.89 / Perplexity $5.36).
 - **Hard stops (by design):** PDL quota spent → exit 3, stops cleanly, current
   person rolled back. 3 errors in a row (systemic) → exit 4, stops. A one-off bad
   profile → marked `error`, rolled back, run continues. **No half-built profile is
   ever saved.**
 - Watch the exit code: `0` = all done, `3` = PDL quota (top up, re-run), `4` =
-  systemic (fix the cause, re-run). On a re-run it rebuilds from the top
-  (idempotent; re-spends on the already-done — fine for ~110).
+  systemic (fix the cause, re-run). `--ids` re-runs exactly the list each time,
+  so a re-run redoes the whole set (idempotent; re-spends — fine for ~34).
 
-> PDL note: ~110 matches ≈ $31 of PDL. Make sure the monthly quota covers it, or
-> it'll hard-stop partway (which is safe, just incomplete).
+> PDL note: ~34 matches, and 20 of them are BROKEN (mostly ghosts that miss PDL
+> = no credit), so realistic PDL use is well under the 86-credit balance.
 
 ## 3. Score + flag the rebuilt profiles (free)
 

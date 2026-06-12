@@ -203,9 +203,20 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--bucket", choices=_BUCKET_ORDER, default=None,
                     help="show the roster for just one bucket")
+    ap.add_argument("--rerun-ids", action="store_true",
+                    help="print ONLY the comma-separated ids of the rerun set "
+                         "(WEAK+BROKEN), for piping into phase2_enrich --ids")
+    ap.add_argument("--include-good", action="store_true",
+                    help="with --rerun-ids, also include GOOD (everything "
+                         "struggling at all)")
     args = ap.parse_args(argv)
     with connect(Path(DB_PATH)) as conn:
         grades = grade_all(conn)
+    if args.rerun_ids:
+        target = {"WEAK", "BROKEN"} | ({"GOOD"} if args.include_good else set())
+        ids = [str(g.person_id) for g in grades if g.bucket in target]
+        print(",".join(ids))
+        return 0
     render(grades, args.bucket)
     return 0
 
