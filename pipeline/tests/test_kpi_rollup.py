@@ -6,11 +6,13 @@ from kpi_rollup import (
     advanced_degree_rate,
     avg_tenure,
     avg_years_to_md,
+    avg_years_to_senior,
     count_flag,
     kpi_signature_stats,
     landing_sectors,
     left_texas_rate,
     reached_md_stats,
+    reached_senior_stats,
     transitioned_count,
     with_kpi_stats,
 )
@@ -18,13 +20,16 @@ from person_insights_store import PersonInsight
 
 
 def _p(pid, *, grad=None, md=False, buy=False, fp=False, sff=False, sss=False,
-       adv=False, tenure=None, ytm=None, left=None, sector=""):
+       adv=False, tenure=None, ytm=None, left=None, sector="",
+       senior=False, mgr=False, yts=None, ytmgr=None):
     return PersonInsight(
         person_id=pid, grad_year=grad, grad_year_source="class-map",
         first_employer="X", on_buy_side=buy, reached_md=md,
         founder_partner=fp, still_first_firm=sff, started_sell_side=sss,
         has_advanced_degree=adv, tenure_years=tenure, years_to_md=ytm,
         left_texas=left, current_sector=sector,
+        reached_senior_leadership=senior, reached_manager=mgr,
+        years_to_senior_leadership=yts, years_to_manager=ytmgr,
     )
 
 
@@ -75,16 +80,16 @@ def test_md_boundary_exactly_ten_years():
 
 def test_signature_stats_shape_and_order():
     people = [
-        _p(1, grad=2010, md=True, buy=True, fp=True, sff=False),
-        _p(2, grad=2012, md=True, buy=True, fp=False, sff=True),
-        _p(3, grad=2024, md=False, buy=False, fp=False, sff=False),
+        _p(1, grad=2010, senior=True, buy=True, fp=True, sff=False),
+        _p(2, grad=2012, senior=True, buy=True, fp=False, sff=True),
+        _p(3, grad=2024, senior=False, buy=False, fp=False, sff=False),
     ]
     stats = kpi_signature_stats(people, snapshot_year=2026)
     labels = [s.label for s in stats]
     # the 4 KPIs lead the scorecard, in order...
     assert labels[:4] == [
         "Now on the buy-side",
-        "Reached MD or above",
+        "Reached senior leadership",
         "Founders & partners",
         "Still at their first firm",
     ]
@@ -92,12 +97,41 @@ def test_signature_stats_shape_and_order():
     assert "Earned a graduate degree" in labels
     # buy-side 2/3 = 67%
     assert stats[0].value == "67%"
-    # MD: denom = grads<=2016 (1,2) + reached (none extra) = 2; num = 2 -> 100%
+    # senior: denom = grads<=2016 (1,2) + reached (none extra) = 2; num = 2 -> 100%
     assert stats[1].value == "100%"
+    assert stats[1].key == "reached_senior_leadership"
     # founders count = 1 (displayed as a count, not %)
     assert stats[2].value == "1"
     # still-first-firm 1/3 = 33%
     assert stats[3].value == "33%"
+
+
+def test_reached_senior_stats_fair_shot():
+    people = [
+        _p(1, grad=2010, senior=True),
+        _p(2, grad=2010, senior=False),  # fair shot, didn't reach
+        _p(3, grad=2024, senior=False),  # recent grad excluded
+    ]
+    num, den, pct = reached_senior_stats(people, snapshot_year=2026)
+    assert num == 1 and den == 2 and pct == 50
+
+
+def test_manager_tile_present_with_avg_years():
+    people = [
+        _p(1, grad=2010, mgr=True, ytmgr=4),
+        _p(2, grad=2012, mgr=True, ytmgr=6),
+        _p(3, grad=2024, mgr=False),
+    ]
+    stats = kpi_signature_stats(people, snapshot_year=2026)
+    by_key = {s.key: s for s in stats}
+    assert "reached_manager" in by_key
+    assert by_key["reached_manager"].value == "67%"  # 2/3
+    assert "5 yrs" in by_key["reached_manager"].detail  # avg(4,6)
+
+
+def test_avg_years_to_senior():
+    people = [_p(1, yts=6), _p(2, yts=10), _p(3, yts=None)]
+    assert avg_years_to_senior(people) == 8.0
 
 
 def test_signature_stats_empty_when_none_classified():

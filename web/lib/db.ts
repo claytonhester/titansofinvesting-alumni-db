@@ -847,7 +847,7 @@ export interface KpiMember {
   titanClass: number;
   // KPI-specific context line (role · firm, "N yrs to MD", current city, …).
   detail: string;
-  // Raw numeric for distribution KPIs (years_to_md, tenure); null otherwise — so
+  // Raw numeric for distribution KPIs (years_to_senior_leadership, tenure); null otherwise — so
   // the modal can draw a histogram instead of just a ring.
   metric: number | null;
 }
@@ -856,11 +856,12 @@ export interface KpiMember {
 // pipeline kpi_rollup.py. A tile whose key isn't here is simply not clickable.
 export const KPI_KEYS = [
   "buy_side",
-  "reached_md",
+  "reached_senior_leadership",
   "founder_partner",
   "still_first_firm",
   "grad_degree",
-  "years_to_md",
+  "years_to_senior_leadership",
+  "reached_manager",
   "tenure",
   "left_texas",
 ] as const;
@@ -876,11 +877,15 @@ function claimSub(claimType: string): string {
 // insight (fastest climbers first, longest tenure first, else alphabetical).
 const KPI_QUERY: Record<KpiKey, { where: string; orderBy: string }> = {
   buy_side: { where: "pi.on_buy_side = 1", orderBy: "p.full_name" },
-  reached_md: { where: "pi.reached_md = 1", orderBy: "p.full_name" },
+  reached_senior_leadership: { where: "pi.reached_senior_leadership = 1", orderBy: "p.full_name" },
   founder_partner: { where: "pi.founder_partner = 1", orderBy: "p.full_name" },
   still_first_firm: { where: "pi.still_first_firm = 1", orderBy: "p.full_name" },
   grad_degree: { where: "pi.has_advanced_degree = 1", orderBy: "p.full_name" },
-  years_to_md: { where: "pi.years_to_md IS NOT NULL", orderBy: "pi.years_to_md ASC, p.full_name" },
+  years_to_senior_leadership: {
+    where: "pi.years_to_senior_leadership IS NOT NULL",
+    orderBy: "pi.years_to_senior_leadership ASC, p.full_name",
+  },
+  reached_manager: { where: "pi.reached_manager = 1", orderBy: "p.full_name" },
   tenure: { where: "pi.tenure_years IS NOT NULL", orderBy: "pi.tenure_years DESC, p.full_name" },
   left_texas: { where: "pi.left_texas = 1", orderBy: "p.full_name" },
 };
@@ -894,7 +899,7 @@ interface KpiRow {
   title: string;
   location: string;
   firstEmployer: string;
-  yearsToMd: number | null;
+  yearsToSenior: number | null;
   tenureYears: number | null;
 }
 
@@ -908,16 +913,17 @@ function joinRoleFirm(title: string, firm: string): string {
 function kpiDetail(key: KpiKey, r: KpiRow): string {
   switch (key) {
     case "buy_side":
-    case "reached_md":
+    case "reached_senior_leadership":
+    case "reached_manager":
     case "grad_degree":
       return joinRoleFirm(r.title, r.employer);
     case "founder_partner":
       return joinRoleFirm(r.title, r.employer);
     case "still_first_firm":
       return joinRoleFirm(r.title, r.firstEmployer || r.employer);
-    case "years_to_md":
-      return r.yearsToMd != null
-        ? `${r.yearsToMd} yrs to MD${r.employer ? ` · ${r.employer}` : ""}`
+    case "years_to_senior_leadership":
+      return r.yearsToSenior != null
+        ? `${r.yearsToSenior} yrs to senior leadership${r.employer ? ` · ${r.employer}` : ""}`
         : joinRoleFirm(r.title, r.employer);
     case "tenure":
       return r.tenureYears != null
@@ -946,7 +952,7 @@ export function kpiMembers(key: string): KpiMember[] {
            ${claimSub("current_title")}    AS title,
            ${claimSub("location")}         AS location,
            COALESCE(pi.first_employer, '') AS firstEmployer,
-           pi.years_to_md  AS yearsToMd,
+           pi.years_to_senior_leadership AS yearsToSenior,
            pi.tenure_years AS tenureYears
          FROM person_insights pi
          JOIN people p ON p.id = pi.person_id
@@ -964,8 +970,8 @@ export function kpiMembers(key: string): KpiMember[] {
     titanClass: r.titanClass,
     detail: kpiDetail(key as KpiKey, r),
     metric:
-      key === "years_to_md"
-        ? r.yearsToMd
+      key === "years_to_senior_leadership"
+        ? r.yearsToSenior
         : key === "tenure"
           ? r.tenureYears
           : null,

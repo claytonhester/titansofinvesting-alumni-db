@@ -97,6 +97,15 @@ class PersonInsight:
     model: str = ""
     # Read-only here: written by compute_completeness.py, not the upsert.
     completeness_score: int = 0
+    # Cross-industry seniority (seniority_v2). Read-only here: written by
+    # reclassify_levels.py, not the enrichment upsert. Live alongside the legacy
+    # reached_md / years_to_md, which stay for rollback until the web migration
+    # is proven. peak_level is "" when no ranked role is on file.
+    peak_level: str = ""
+    reached_manager: bool = False
+    reached_senior_leadership: bool = False
+    years_to_manager: int | None = None
+    years_to_senior_leadership: int | None = None
 
 
 def _ensure_columns(conn: sqlite3.Connection) -> None:
@@ -252,6 +261,19 @@ def _to_insight(row: sqlite3.Row) -> PersonInsight:
         employer_domain=(row["employer_domain"] if "employer_domain" in row.keys() else "") or "",
         model=row["model"],
         completeness_score=(row["completeness_score"] if "completeness_score" in row.keys() else 0) or 0,
+        peak_level=(row["peak_level"] if "peak_level" in row.keys() else "") or "",
+        reached_manager=bool(row["reached_manager"]) if "reached_manager" in row.keys() else False,
+        reached_senior_leadership=(
+            bool(row["reached_senior_leadership"])
+            if "reached_senior_leadership" in row.keys() else False
+        ),
+        years_to_manager=(
+            row["years_to_manager"] if "years_to_manager" in row.keys() else None
+        ),
+        years_to_senior_leadership=(
+            row["years_to_senior_leadership"]
+            if "years_to_senior_leadership" in row.keys() else None
+        ),
     )
 
 

@@ -52,6 +52,22 @@ def avg_years_to_md(insights: Sequence[PersonInsight]) -> float | None:
     return _avg([p.years_to_md for p in insights if p.years_to_md is not None])
 
 
+def avg_years_to_senior(insights: Sequence[PersonInsight]) -> float | None:
+    """Cross-industry replacement for avg_years_to_md: grad -> first Senior
+    Leadership rung (MD/Director in finance, VP+ in corporate, partner)."""
+    return _avg([
+        p.years_to_senior_leadership for p in insights
+        if p.years_to_senior_leadership is not None
+    ])
+
+
+def avg_years_to_manager(insights: Sequence[PersonInsight]) -> float | None:
+    """Grad -> first management/Director rung (the lower threshold)."""
+    return _avg([
+        p.years_to_manager for p in insights if p.years_to_manager is not None
+    ])
+
+
 def left_texas_rate(insights: Sequence[PersonInsight]) -> tuple[int, int]:
     """(pct who left Texas, n with a known current location). The denominator is
     only people whose current location we actually know."""
@@ -108,6 +124,31 @@ def reached_md_stats(
     return numerator, denominator, _pct(numerator, denominator)
 
 
+def reached_senior_stats(
+    insights: Sequence[PersonInsight],
+    snapshot_year: int,
+    *,
+    years: int = MD_FAIR_SHOT_YEARS,
+) -> tuple[int, int, int]:
+    """(numerator, denominator, pct) for "Reached senior leadership" under the
+    same fair-shot rule as reached_md_stats, but on the cross-industry rung:
+    numerator = reached Senior Leadership+ ever; denominator = those, plus anyone
+    graduated at least `years` before the snapshot (a fair shot at getting there).
+    Someone with no grad_year counts only if they already reached it."""
+    cutoff = snapshot_year - years
+    numerator = denominator = 0
+    for p in insights:
+        had_fair_shot = (
+            p.reached_senior_leadership
+            or (p.grad_year is not None and p.grad_year <= cutoff)
+        )
+        if had_fair_shot:
+            denominator += 1
+            if p.reached_senior_leadership:
+                numerator += 1
+    return numerator, denominator, _pct(numerator, denominator)
+
+
 def kpi_signature_stats(
     insights: Sequence[PersonInsight],
     *,
@@ -125,7 +166,7 @@ def kpi_signature_stats(
     founders = count_flag(insights, "founder_partner")
     still = count_flag(insights, "still_first_firm")
     moved = transitioned_count(insights)
-    md_num, md_den, md_pct = reached_md_stats(insights, snapshot_year, md_years=md_years)
+    sl_num, sl_den, sl_pct = reached_senior_stats(insights, snapshot_year, years=md_years)
 
     buy_detail = (
         f"{moved} moved in from banking or consulting"
@@ -141,11 +182,11 @@ def kpi_signature_stats(
             key="buy_side",
         ),
         SignatureStat(
-            label="Reached MD or above",
-            value=f"{md_pct}%",
+            label="Reached senior leadership",
+            value=f"{sl_pct}%",
             detail=f"of those already there or {md_years}+ years out",
-            pct=md_pct,
-            key="reached_md",
+            pct=sl_pct,
+            key="reached_senior_leadership",
         ),
         SignatureStat(
             label="Founders & partners",
@@ -179,14 +220,31 @@ def _secondary_stats(insights: Sequence[PersonInsight]) -> tuple[SignatureStat, 
         key="grad_degree",
     ))
 
-    ytm = avg_years_to_md(insights)
-    if ytm is not None:
+    yts = avg_years_to_senior(insights)
+    if yts is not None:
         out.append(SignatureStat(
-            label="Avg years to MD",
-            value=f"{ytm:.0f} yrs",
-            detail="from graduation to Managing Director or above",
+            label="Avg years to senior leadership",
+            value=f"{yts:.0f} yrs",
+            detail="from graduation to the senior-leadership tier",
             pct=0,
-            key="years_to_md",
+            key="years_to_senior_leadership",
+        ))
+
+    mgr = count_flag(insights, "reached_manager")
+    classified = len(insights)
+    if classified:
+        ytmgr = avg_years_to_manager(insights)
+        mgr_detail = (
+            f"first management rung — avg {ytmgr:.0f} yrs to get there"
+            if ytmgr is not None
+            else "reached a management / director rung"
+        )
+        out.append(SignatureStat(
+            label="Reached management",
+            value=f"{_pct(mgr, classified)}%",
+            detail=mgr_detail,
+            pct=_pct(mgr, classified),
+            key="reached_manager",
         ))
 
     ten = avg_tenure(insights)

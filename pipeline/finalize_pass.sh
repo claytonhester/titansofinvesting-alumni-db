@@ -9,14 +9,19 @@
 #   2. compute_completeness.py — free deterministic 0-100 profile-quality score per
 #                                person (Build Status surfaces avg/low + refresh
 #                                candidates so weak profiles raise their own hand).
-#   3. phase3_insights.py --llm — cohort snapshot WITH the billed Haiku overlay:
+#   3. reclassify_levels.py    — cross-industry seniority ladder: classify every
+#                                role (cached, ~pennies), write peak_level + the two
+#                                thresholds (Senior Leadership / Manager) + the
+#                                career trajectory. Runs BEFORE phase3 so the KPI
+#                                rollup reads the fresh columns.
+#   4. phase3_insights.py --llm — cohort snapshot WITH the billed Haiku overlay:
 #                                canonicalized + seniority-ordered current titles,
 #                                seniority ladder, and the narrative. MUST be --llm,
 #                                or the snapshot reverts to the templated narrative
 #                                and raw (un-canonicalized) titles.
-#   4. npm run embed           — rebuild person_vectors (semantic search) in the
+#   5. npm run embed           — rebuild person_vectors (semantic search) in the
 #                                pipeline DB so new/changed profiles are findable.
-#   5. npm run sync-db         — copy pipeline DB -> web/data/titans.db (the tracked,
+#   6. npm run sync-db         — copy pipeline DB -> web/data/titans.db (the tracked,
 #                                deployed snapshot). Commit the web DB to ship.
 #
 # Idempotent and safe to re-run. Each step is independent; a failure is reported but
@@ -38,19 +43,22 @@ step() {
 
 echo "===== FINALIZE PASS — START $(date) ====="
 
-step "1/5 reclassify sectors (Haiku catch-all upgrade)" \
+step "1/6 reclassify sectors (Haiku catch-all upgrade)" \
   python -u reclassify_sectors.py
 
-step "2/5 profile completeness scores (free, deterministic)" \
+step "2/6 profile completeness scores (free, deterministic)" \
   python -u compute_completeness.py
 
-step "3/5 phase3 insights snapshot (--llm: titles + seniority + narrative)" \
+step "3/6 reclassify seniority levels (cross-industry ladder; cache = pennies)" \
+  python -u reclassify_levels.py
+
+step "4/6 phase3 insights snapshot (--llm: titles + seniority + narrative)" \
   python -u phase3_insights.py --llm
 
-step "4/5 re-embed (semantic search vectors)" \
+step "5/6 re-embed (semantic search vectors)" \
   npm --prefix ../web run embed
 
-step "5/5 sync pipeline DB -> web snapshot" \
+step "6/6 sync pipeline DB -> web snapshot" \
   npm --prefix ../web run sync-db
 
 # Optional 6th step — the batch scorecard (model-card report on this chunk:
