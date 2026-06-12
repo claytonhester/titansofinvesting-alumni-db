@@ -17,6 +17,12 @@ The project is two halves that share one SQLite database:
 
 ## Data & privacy
 
+**This repository ships a small synthetic _sample_ database, not the real
+dataset.** `web/data/sample.db` contains ~15 fabricated alumni so the app runs
+out of the box; the real alumni data is never committed here. (A production
+deployment loads the real DB at build time from a private URL — see
+[`web/scripts/sync-db.mjs`](web/scripts/sync-db.mjs).)
+
 The starting roster comes from the **public** Titans of Investing class
 directory. Enrichment adds only **publicly available, source-attributed**
 career facts (each claim stores its source URL and a verbatim quote so a human
@@ -24,7 +30,8 @@ can verify it). The app is **read-only**. No private or behind-login data is
 collected, and the pipeline is built to refuse low-confidence identity matches
 rather than guess.
 
-If you are an alum and want a correction or removal, open an issue.
+If you are an alum and want a correction or removal, see
+[SECURITY.md](SECURITY.md) — please email rather than opening a public issue.
 
 ---
 
@@ -75,7 +82,7 @@ See [`RUNBOOK.md`](RUNBOOK.md) for the exact commands to run each stage.
 ├── web/             # Next.js app: directory, insights, chat
 │   ├── app/         # routes + views (Overview, Directory, person pages)
 │   ├── lib/         # DB access, insights, chat gate
-│   └── data/        # bundled read-only DB snapshot the app ships with
+│   └── data/        # sample.db — the synthetic snapshot the app ships with
 ├── docs/            # design notes + plans (architecture, enrichment, insights)
 └── RUNBOOK.md       # operator's guide: run the pipeline end to end
 ```
@@ -84,12 +91,13 @@ See [`RUNBOOK.md`](RUNBOOK.md) for the exact commands to run each stage.
 
 ## Running it
 
-**Web app (local):**
+**Web app (local):** runs against the bundled synthetic sample DB — no API keys
+or data needed.
 
 ```bash
 cd web
 npm install
-npm run dev        # predev syncs the DB snapshot automatically
+npm run dev        # http://localhost:3210 (predev syncs the DB automatically)
 ```
 
 **Pipeline:** requires API keys (see [`.env.example`](.env.example)). Full
@@ -130,6 +138,18 @@ root [`.env.example`](.env.example).
   and a corporate "VP" are different rungs), cached so re-runs are near-free.
 - **Cost-aware model routing.** Cheap deterministic passes do the bulk; Claude
   is used only where judgment is needed, with per-run cost logging.
+
+---
+
+## Contributing & license
+
+Contributions to the **code** are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
+for setup, the sample-data rules, and the PR process. Please also read the
+[Code of Conduct](CODE_OF_CONDUCT.md). Security and data-removal requests go
+through [SECURITY.md](SECURITY.md).
+
+Licensed under the [MIT License](LICENSE) (code only — no real dataset is
+distributed).
 
 ---
 

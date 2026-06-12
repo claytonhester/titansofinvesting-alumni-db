@@ -18,11 +18,14 @@ const nextConfig = {
   //
   // Build runs with webpack (`next build --webpack`): Next 16 defaults `build`
   // to Turbopack, which does NOT honor these includes at all.
+  //
+  // sample.db is traced too: an open-source deploy with no real DB ships the
+  // synthetic snapshot, and lib/db.ts falls back to it.
   outputFileTracingIncludes: {
-    "/": ["./data/titans.db", "./web/data/titans.db"],
-    "/api/chat": ["./data/titans.db", "./web/data/titans.db"],
-    "/person/[slug]": ["./data/titans.db", "./web/data/titans.db"],
-    "/company/[slug]": ["./data/titans.db", "./web/data/titans.db"],
+    "/": ["./data/*.db", "./web/data/*.db"],
+    "/api/chat": ["./data/*.db", "./web/data/*.db"],
+    "/person/[slug]": ["./data/*.db", "./web/data/*.db"],
+    "/company/[slug]": ["./data/*.db", "./web/data/*.db"],
   },
 };
 

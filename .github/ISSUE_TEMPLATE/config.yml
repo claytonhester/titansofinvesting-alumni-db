@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Data correction or removal (alumni)
+    url: mailto:claytonhester10@gmail.com
+    about: >-
+      Are you an alum and want your information corrected or removed? Email us —
+      please do NOT post personal details in a public issue. See SECURITY.md.
+  - name: Report a security vulnerability
+    url: mailto:claytonhester10@gmail.com
+    about: >-
+      Please report security issues privately by email, not as a public issue.
