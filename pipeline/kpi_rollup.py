@@ -26,8 +26,9 @@ from dataclasses import replace
 
 from collections import Counter
 
-from insights_store import InsightsSnapshot, SectorCount, SignatureStat
+from insights_store import InsightsSnapshot, SectorCount, SeniorityTier, SignatureStat
 from person_insights_store import PersonInsight
+from seniority_v2 import LEVELS
 
 MD_FAIR_SHOT_YEARS = 10
 
@@ -92,6 +93,20 @@ def landing_sectors(insights: Sequence[PersonInsight]) -> tuple[SectorCount, ...
 def count_flag(insights: Sequence[PersonInsight], attr: str) -> int:
     """How many classified people have a given boolean flag set."""
     return sum(1 for p in insights if getattr(p, attr))
+
+
+def peak_level_distribution(insights: Sequence[PersonInsight]) -> tuple[SeniorityTier, ...]:
+    """The cohort seniority ladder on the CROSS-INDUSTRY rungs (seniority_v2):
+    one bar per LEVELS rung, counting people by their peak rung. Replaces the old
+    finance-only ladder so the Overview chart agrees with the Senior Leadership /
+    Manager KPIs. People with no ranked role (peak_level == "") are omitted.
+    Ordered shallow -> senior to match the web's top-to-bottom render."""
+    counts = Counter(p.peak_level for p in insights if p.peak_level)
+    return tuple(
+        SeniorityTier(tier=lvl, count=counts[lvl])
+        for lvl in LEVELS
+        if counts.get(lvl)
+    )
 
 
 def transitioned_count(insights: Sequence[PersonInsight]) -> int:
@@ -283,9 +298,11 @@ def with_kpi_stats(
     yet the tiles are emptied so the web renders an empty state instead of zeros."""
     stats = kpi_signature_stats(insights, snapshot_year=snapshot_year, md_years=md_years)
     founders = count_flag(insights, "founder_partner") if insights else snap.founders_partners
+    seniority = peak_level_distribution(insights) if insights else snap.seniority
     return replace(
         snap,
         signature_stats=stats,
         founders_partners=founders,
         landing_sectors=landing_sectors(insights),
+        seniority=seniority,
     )

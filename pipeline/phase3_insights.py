@@ -33,7 +33,7 @@ from anthropic import Anthropic
 from config import DB_PATH, require_key
 from cost_log import append_entry, build_entry
 from db import connect, init_schema
-from insights_llm import canonicalize_titles, classify_seniority, write_narrative
+from insights_llm import canonicalize_titles, write_narrative
 from insights_rollup import (
     DEFAULT_TOP_TITLES,
     _value_counts,
@@ -70,8 +70,11 @@ def _apply_llm_overlay(
     firms = landing_firms(conn)
     distinct_employers = len(_value_counts(conn, "current_employer"))
 
-    seniority_cls = classify_seniority(anthropic, title_counts)
-    new_seniority = seniority_cls.tiers or snap.seniority
+    # Seniority distribution is NOT reclassified here anymore: with_kpi_stats has
+    # already set snap.seniority to the cross-industry peak-level ladder
+    # (seniority_v2), so it agrees with the Senior Leadership / Manager KPIs.
+    # Re-running the old finance-only classify_seniority would overwrite it.
+    new_seniority = snap.seniority
 
     # Canonicalize the raw title vocabulary so near-duplicate titles (Associate /
     # Associate Attorney / Associate – Private Equity; the long product-suffixed
@@ -100,12 +103,8 @@ def _apply_llm_overlay(
         narrative=narrative.text,
         seniority=new_seniority,
         current_titles=new_titles,
-        haiku_tokens_in=(
-            seniority_cls.input_tokens + title_cls.input_tokens + narrative.input_tokens
-        ),
-        haiku_tokens_out=(
-            seniority_cls.output_tokens + title_cls.output_tokens + narrative.output_tokens
-        ),
+        haiku_tokens_in=(title_cls.input_tokens + narrative.input_tokens),
+        haiku_tokens_out=(title_cls.output_tokens + narrative.output_tokens),
     )
     return overlaid
 
