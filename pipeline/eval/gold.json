@@ -8,7 +8,10 @@
     "expect": {
       "current_employer": "HealthMark Group",
       "current_title": "Chief Executive Officer",
-      "education": ["Texas A&M", "Harvard Business School"],
+      "education": [
+        "Texas A&M",
+        "Harvard Business School"
+      ],
       "linkedin_url": "https://www.linkedin.com/in/bart-howe-ab65115"
     },
     "must_reject_urls": [],
@@ -23,7 +26,10 @@
     "expect": {
       "current_employer": "AIM7",
       "current_title": "Chief of Staff",
-      "education": ["London Business School", "Texas A&M"],
+      "education": [
+        "London Business School",
+        "Texas A&M"
+      ],
       "linkedin_url": "https://www.linkedin.com/in/payalpatel1002"
     },
     "must_reject_urls": [],
@@ -36,7 +42,9 @@
     "source": "human-verified",
     "note": "P0 namesake incident: wwana.com broker echo spliced a Boston-University / Morgan-Stanley / New-York stranger. Remediated to honest-empty. Must never re-accept the broker URL or carry a current role.",
     "expect": {},
-    "must_reject_urls": ["wwana.com"],
+    "must_reject_urls": [
+      "wwana.com"
+    ],
     "must_stay_empty": true
   },
   {
@@ -44,7 +52,7 @@
     "full_name": "Michael Rooney",
     "verified_on": "2026-06-10",
     "source": "human-verified",
-    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "note": "Confirmed ghost \u2014 no public footprint found in the deep pass.",
     "expect": {},
     "must_reject_urls": [],
     "must_stay_empty": true
@@ -54,7 +62,7 @@
     "full_name": "Peter Foster",
     "verified_on": "2026-06-10",
     "source": "human-verified",
-    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "note": "Confirmed ghost \u2014 no public footprint found in the deep pass.",
     "expect": {},
     "must_reject_urls": [],
     "must_stay_empty": true
@@ -64,7 +72,7 @@
     "full_name": "Sofia Kampfe",
     "verified_on": "2026-06-10",
     "source": "human-verified",
-    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "note": "Confirmed ghost \u2014 no public footprint found in the deep pass.",
     "expect": {},
     "must_reject_urls": [],
     "must_stay_empty": true
@@ -74,7 +82,7 @@
     "full_name": "Samantha Bell",
     "verified_on": "2026-06-10",
     "source": "human-verified",
-    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "note": "Confirmed ghost \u2014 no public footprint found in the deep pass.",
     "expect": {},
     "must_reject_urls": [],
     "must_stay_empty": true
@@ -84,7 +92,7 @@
     "full_name": "Alan Boyd",
     "verified_on": "2026-06-10",
     "source": "human-verified",
-    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "note": "Confirmed ghost \u2014 no public footprint found in the deep pass.",
     "expect": {},
     "must_reject_urls": [],
     "must_stay_empty": true
@@ -94,7 +102,7 @@
     "full_name": "James Miller",
     "verified_on": "2026-06-10",
     "source": "human-verified",
-    "note": "Confirmed ghost — common name, no verifiable footprint. Strong namesake risk.",
+    "note": "Confirmed ghost \u2014 common name, no verifiable footprint. Strong namesake risk.",
     "expect": {},
     "must_reject_urls": [],
     "must_stay_empty": true
@@ -104,7 +112,7 @@
     "full_name": "Austin Christensen",
     "verified_on": "2026-06-10",
     "source": "human-verified",
-    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "note": "Confirmed ghost \u2014 no public footprint found in the deep pass.",
     "expect": {},
     "must_reject_urls": [],
     "must_stay_empty": true
@@ -114,7 +122,7 @@
     "full_name": "Priyanka Suri",
     "verified_on": "2026-06-10",
     "source": "human-verified",
-    "note": "Confirmed ghost — no public footprint found in the deep pass.",
+    "note": "Confirmed ghost \u2014 no public footprint found in the deep pass.",
     "expect": {},
     "must_reject_urls": [],
     "must_stay_empty": true
@@ -124,7 +132,7 @@
     "full_name": "Julia Hu",
     "verified_on": "2026-06-10",
     "source": "human-verified",
-    "note": "Confirmed ghost — common name, no verifiable footprint. Strong namesake risk.",
+    "note": "Confirmed ghost \u2014 common name, no verifiable footprint. Strong namesake risk.",
     "expect": {},
     "must_reject_urls": [],
     "must_stay_empty": true
@@ -138,7 +146,10 @@
     "expect": {
       "current_employer": "UTIMCO",
       "current_title": "Associate - Private Equity",
-      "education": ["University of Texas at Austin", "Texas A&M"],
+      "education": [
+        "University of Texas at Austin",
+        "Texas A&M"
+      ],
       "linkedin_url": "https://linkedin.com/in/ryan-bissmeyer"
     },
     "must_reject_urls": [],
@@ -153,7 +164,9 @@
     "expect": {
       "current_employer": "Canary Data",
       "current_title": "Executive Vice President",
-      "education": ["University of Texas at Austin"],
+      "education": [
+        "University of Texas at Austin"
+      ],
       "linkedin_url": "https://linkedin.com/in/anthony-qi"
     },
     "must_reject_urls": [],
@@ -168,7 +181,10 @@
     "expect": {
       "current_employer": "Hines",
       "current_title": "Managing Director",
-      "education": ["University of Texas at Austin", "Arizona State"],
+      "education": [
+        "University of Texas at Austin",
+        "Arizona State"
+      ],
       "linkedin_url": "https://linkedin.com/in/alexohrn"
     },
     "must_reject_urls": [],
@@ -183,7 +199,10 @@
     "expect": {
       "current_employer": "Globe Life",
       "current_title": "Senior Investment Analyst",
-      "education": ["Peking University", "Rice University"],
+      "education": [
+        "Peking University",
+        "Rice University"
+      ],
       "linkedin_url": "https://linkedin.com/in/yanlutx"
     },
     "must_reject_urls": [],
@@ -198,7 +217,9 @@
     "expect": {
       "current_employer": "Texas Capital Bank",
       "current_title": "Managing Director",
-      "education": ["Texas A&M"],
+      "education": [
+        "Texas A&M"
+      ],
       "linkedin_url": "https://linkedin.com/in/silviocanto"
     },
     "must_reject_urls": [],
@@ -213,7 +234,9 @@
     "expect": {
       "current_employer": "SNH Capital Partners",
       "current_title": "Senior Associate",
-      "education": ["University of Texas at Austin"],
+      "education": [
+        "University of Texas at Austin"
+      ],
       "linkedin_url": "https://linkedin.com/in/craigkrzyskowski"
     },
     "must_reject_urls": [],
@@ -228,7 +251,9 @@
     "expect": {
       "current_employer": "Texas Treasury Safekeeping Trust Company",
       "current_title": "Senior Portfolio Manager",
-      "education": ["University of Texas at Austin"],
+      "education": [
+        "University of Texas at Austin"
+      ],
       "linkedin_url": "https://linkedin.com/in/nicole-wang-lp"
     },
     "must_reject_urls": [],
@@ -243,10 +268,58 @@
     "expect": {
       "current_employer": "EventPipe",
       "current_title": "Senior Vice President",
-      "education": ["Texas A&M"],
+      "education": [
+        "Texas A&M"
+      ],
       "linkedin_url": "https://linkedin.com/in/brandon-hollmann-b519089"
     },
     "must_reject_urls": [],
     "must_stay_empty": false
+  },
+  {
+    "person_id": 34,
+    "full_name": "Komson Silapachai",
+    "source": "human-verified",
+    "verified_on": "2026-06-12",
+    "note": "User-verified against the live LinkedIn profile (screenshot, 2026-06-12). VP role recorded 2016-2021 (LinkedIn shows it unclosed alongside the 2021 Partner promotion).",
+    "must_stay_empty": false,
+    "must_reject_urls": [],
+    "expect": {
+      "current_employer": "Sage Advisory",
+      "current_title": "Partner, Senior Strategist",
+      "linkedin_url": "https://linkedin.com/in/komson-silapachai-bab3307",
+      "career": [
+        {
+          "company": "Sage Advisory",
+          "title_contains": "Partner",
+          "start": 2021,
+          "end": null
+        },
+        {
+          "company": "Sage Advisory",
+          "title_contains": "Vice President",
+          "start": 2016,
+          "end": 2021
+        },
+        {
+          "company": "Teacher Retirement System of Texas",
+          "title_contains": "Investment Manager",
+          "start": 2013,
+          "end": 2016
+        },
+        {
+          "company": "Teacher Retirement System of Texas",
+          "title_contains": "Senior Associate",
+          "start": 2009,
+          "end": 2013
+        },
+        {
+          "company": "Teacher Retirement System of Texas",
+          "title_contains": "Associate",
+          "start": 2008,
+          "end": 2009
+        }
+      ]
+    }
   }
 ]

@@ -460,16 +460,20 @@ function currentRoleEntry(
   };
 }
 
+// Only a real PROFILE URL (linkedin.com/in/<slug>) counts as someone's
+// LinkedIn. A /posts/ or /pulse/ link is a mention ABOUT the person — it used
+// to leak in here and get labeled "View LinkedIn" (the Komson case), which
+// also suppressed the "Find on LinkedIn" search fallback.
+const LINKEDIN_PROFILE_RE = /https?:\/\/[^\s)"]*linkedin\.com\/in\/[^\s)"]+/i;
+
 function findLinkedIn(claims: Claim[]): string | null {
-  // Restrict to public_links claims only — searching all claim types risks
-  // matching a news_mention that references linkedin.com in a different context
-  // (e.g. an article about a different person at LinkedIn Inc.).
-  for (const c of claims.filter((c) => c.claim_type === "public_links")) {
-    const haystack = `${c.value} ${c.source_url}`.toLowerCase();
-    if (haystack.includes("linkedin.com")) {
-      const match = `${c.value} ${c.source_url}`.match(
-        /https?:\/\/[^\s)"]*linkedin\.com\/[^\s)"]*/i
-      );
+  // Prefer the dedicated linkedin_url claim (search-resolved / read-verified),
+  // then fall back to a profile URL among public_links. Restricted to these two
+  // claim types — searching all types risks matching a news_mention that
+  // references linkedin.com in a different context.
+  for (const type of ["linkedin_url", "public_links"]) {
+    for (const c of claims.filter((c) => c.claim_type === type)) {
+      const match = `${c.value} ${c.source_url}`.match(LINKEDIN_PROFILE_RE);
       if (match) return match[0];
     }
   }

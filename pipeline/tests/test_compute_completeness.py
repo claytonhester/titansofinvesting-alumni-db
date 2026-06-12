@@ -95,6 +95,16 @@ def test_linkedin_detected_from_source_url_or_value():
     assert via_url.has_linkedin and via_value.has_linkedin
 
 
+def test_posts_link_is_not_a_profile():
+    """A linkedin.com/posts/ mention ABOUT the person must not count as having
+    their LinkedIn profile (the Komson case)."""
+    b = compute_breakdown([
+        _c("public_links", "Q&A: Sage Advisory's Komson Silapachai Speaks",
+           source_url="https://www.linkedin.com/posts/eqderivatives-inc_qa-share-718"),
+    ])
+    assert not b.has_linkedin
+
+
 def test_linkedin_detected_from_linkedin_url_claim_type():
     """The search-resolver records a `linkedin_url`-typed claim, not public_links;
     completeness must count it (else the recorded URL never clears the flag)."""

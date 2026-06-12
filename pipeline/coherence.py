@@ -19,15 +19,21 @@ from enrichment_store import ClaimRow
 
 _TRAILING_PAREN = re.compile(r"\s*\([^)]*\)\s*$")
 
+# Trade-name words that drop off between a firm's legal name and its display
+# name ('Sage Advisory Services' on SEC vs 'Sage Advisory' on LinkedIn). Used in
+# COMPARISONS only — never affects the legal-suffix list the career parser uses.
+_TRADE_SUFFIXES = frozenset({"services"})
+
 
 def _company_key(name: str) -> str:
     """Normalized company name for coherence comparisons only (stored values are
     untouched): drop a trailing parenthetical acronym ('American Campus
-    Communities (ACC)') and a trailing corporate suffix ('Lenox Park Solutions,
-    Inc.') so the same employer compares equal across sources."""
+    Communities (ACC)'), a trailing corporate suffix ('Lenox Park Solutions,
+    Inc.'), and a trailing trade-name word ('Sage Advisory Services') so the
+    same employer compares equal across sources."""
     norm = _norm_company(_TRAILING_PAREN.sub("", name))
     parts = norm.split()
-    while parts and parts[-1].rstrip(".") in _CORP_SUFFIXES:
+    while parts and parts[-1].rstrip(".") in (_CORP_SUFFIXES | _TRADE_SUFFIXES):
         parts.pop()
     return " ".join(parts)
 
