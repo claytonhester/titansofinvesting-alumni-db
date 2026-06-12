@@ -15,11 +15,12 @@ interface KpiModalProps {
 // Short tab labels (the scorecard labels are too long for a tab strip).
 const TAB_LABEL: Record<string, string> = {
   buy_side: "Buy-side",
-  reached_md: "MD or above",
+  reached_senior_leadership: "Senior leadership",
   founder_partner: "Founders",
   still_first_firm: "First firm",
   grad_degree: "Grad degree",
-  years_to_md: "Years to MD",
+  years_to_senior_leadership: "Years to senior",
+  reached_manager: "Management",
   tenure: "Tenure",
   left_texas: "Left Texas",
 };
@@ -33,8 +34,8 @@ interface Bucket {
 // Distribution KPIs draw a histogram instead of a ring. Buckets chosen to read
 // cleanly for each metric's typical range.
 const HISTOGRAM: Record<string, { buckets: Bucket[]; caption: string }> = {
-  years_to_md: {
-    caption: "years from graduation to MD",
+  years_to_senior_leadership: {
+    caption: "years from graduation to senior leadership",
     buckets: [
       { min: 0, max: 2, label: "0–2" },
       { min: 3, max: 5, label: "3–5" },
