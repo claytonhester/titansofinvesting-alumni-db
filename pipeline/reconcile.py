@@ -20,6 +20,9 @@ Design guarantees:
 - **Never drops** — any claim the model fails to mention is kept verbatim.
 - **Never raises** — on any error (network, bad JSON, model drift) it returns the
   input claims unchanged, so the caller's existing digest_claims still runs.
+- **Never cross-merges the current role** — a current_title folded into a
+  current_employer blob ('TITLE at EMPLOYER') is deterministically split back,
+  restoring the input claims verbatim (the Annie Stewart case, person 672).
 - **No-op on thin data** — fewer than two résumé claims → no API call.
 
 Cost: one Haiku call per person (~$0.004). Mentions/links pass straight through.
@@ -27,7 +30,8 @@ Cost: one Haiku call per person (~$0.004). Mentions/links pass straight through.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 
 from anthropic import Anthropic
 
@@ -103,6 +107,11 @@ that SAME role phrased differently or with stale data. If a claim names a \
 genuinely DIFFERENT organization or role (a board seat, advisory role, side \
 venture), do NOT absorb it — emit it as its own career_history fact so it is \
 PRESERVED. A board seat is not the primary job; it is history, not lost.
+- current_title and current_employer are SEPARATE claim types describing the two \
+halves of one role. NEVER fold one into the other: a current_employer value names \
+ONLY the organization ("Texas A&M University", never "Program Coordinator at \
+Texas A&M University") and a current_title value names ONLY the role title. When \
+the input has both types, your output must too — one fact per type.
 - location / short_bio: output exactly one fact, choosing the best value.
 - List types (career_history, education): output one fact per DISTINCT real-world \
 entry. Two phrasings of one job = one fact. Two different jobs = two facts.
@@ -278,6 +287,94 @@ def _norm_value(value: str) -> str:
     return " ".join((value or "").split()).casefold()
 
 
+# The two halves of the current role; each maps to its counterpart type.
+_CURRENT_ROLE_PAIR = {
+    "current_title": "current_employer",
+    "current_employer": "current_title",
+}
+
+
+def _embedded_input_claim(blob_norm: str, candidates: list[ClaimRow]) -> ClaimRow | None:
+    """The longest input claim whose value appears whole-token inside the blob
+    (padded-space containment, so 'Founder' never matches inside 'Founders Fund').
+    A claim equal to the whole blob doesn't count — that's no merge at all."""
+    padded = f" {blob_norm} "
+    hits = [
+        c for c in candidates
+        if _norm_value(c.value)
+        and _norm_value(c.value) != blob_norm
+        and f" {_norm_value(c.value)} " in padded
+    ]
+    return max(hits, key=lambda c: len(_norm_value(c.value)), default=None)
+
+
+def _trim_blob(blob: ClaimRow, eaten: ClaimRow, blob_type: str) -> ClaimRow:
+    """Strip the swallowed counterpart from a 'TITLE at EMPLOYER' blob, keeping
+    only the half that belongs to blob_type. Falls back to the blob unchanged
+    when the trim wouldn't leave anything — never emits an empty value."""
+    if blob_type == "current_employer":
+        pattern = rf"^\s*{re.escape(eaten.value.strip())}\s+at\s+"
+    else:
+        pattern = rf"\s+at\s+{re.escape(eaten.value.strip())}\s*$"
+    trimmed = re.sub(pattern, "", blob.value, flags=re.IGNORECASE).strip(" ,-—")
+    if trimmed and _norm_value(trimmed) != _norm_value(blob.value):
+        return replace(blob, value=trimmed)
+    return blob
+
+
+def _restore_cross_type_current_drops(
+    resume: list[ClaimRow], rows: list[ClaimRow]
+) -> list[ClaimRow]:
+    """Deterministic guard against cross-type merging of the current role.
+
+    Observed live (person 672, Annie Stewart, 2026-06-11): the model folded the
+    current_title INTO the current_employer group and emitted ONE blob claim
+    'Program Coordinator II ... at Texas A&M University' with NO current_title
+    left — costing has_current_role (-20 completeness). The token-overlap guard
+    in _apply cannot catch this: the blob contains both members' text, so both
+    legitimately share tokens with it. The prompt now forbids the fold, but
+    prompts drift; this guard does not.
+
+    For each current-role half missing from the output that the INPUT attested,
+    restore the best input claim of that type VERBATIM (own value, provenance,
+    confidence — so the stored quote always attests the displayed value), and
+    when an output blob of the counterpart type embeds it, roll the blob back to
+    the input value of its own type (or trim the swallowed half off). Nothing is
+    ever invented: every emitted value is an input claim's value or a substring
+    of an attested blob."""
+    for missing, other in _CURRENT_ROLE_PAIR.items():
+        if any(r.claim_type == missing for r in rows):
+            continue
+        inputs = [c for c in resume if c.claim_type == missing and _norm_value(c.value)]
+        if not inputs:
+            continue
+
+        blob_at = next(
+            (i for i, r in enumerate(rows)
+             if r.claim_type == other
+             and _embedded_input_claim(_norm_value(r.value), inputs)),
+            None,
+        )
+        if blob_at is None:
+            # Absorbed without embedding (e.g. demoted into another group):
+            # restore the best-attested input claim so the fact survives.
+            restored = max(inputs, key=lambda c: (c.confidence, len(c.value)))
+            rows = [*rows, restored]
+            continue
+
+        blob = rows[blob_at]
+        blob_norm = _norm_value(blob.value)
+        restored = _embedded_input_claim(blob_norm, inputs)
+        own = _embedded_input_claim(
+            blob_norm, [c for c in resume if c.claim_type == other]
+        )
+        # Prefer rolling the blob back to an input claim of its OWN type — value
+        # and provenance attest each other. Only trim text when no input matches.
+        repaired = own if own is not None else _trim_blob(blob, restored, other)
+        rows = [*rows[:blob_at], repaired, *rows[blob_at + 1 :], restored]
+    return rows
+
+
 def _apply(resume: list[ClaimRow], decisions: list[_Decision]) -> list[ClaimRow]:
     """Build reconciled ClaimRows from decisions, preserving each group's primary
     provenance and re-casing the canonical value. Any résumé claim not covered by
@@ -346,7 +443,7 @@ def _apply(resume: list[ClaimRow], decisions: list[_Decision]) -> list[ClaimRow]
     for i, c in enumerate(resume):
         if i not in covered:
             rows.append(c)
-    return rows
+    return _restore_cross_type_current_drops(resume, rows)
 
 
 def reconcile_claims(

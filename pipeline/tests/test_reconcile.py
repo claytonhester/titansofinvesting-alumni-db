@@ -280,6 +280,151 @@ def test_tiebreak_blended_dated_canonical_keeps_model_primary():
     assert out[0].source_url == "https://web.com"
 
 
+# --- cross-type current-role merge guard (the Annie Stewart case) ---------------
+
+def test_apply_splits_title_swallowed_by_employer_blob():
+    """Regression, person 672 (2026-06-11): the model folded current_title INTO
+    the current_employer group, emitting ONE 'TITLE at EMPLOYER' blob and NO
+    current_title — costing has_current_role. Both claims must be restored
+    verbatim, with their own provenance."""
+    resume = [
+        _claim("current_employer", "Texas A&M University",
+               src="https://pdl/emp", method="pdl", quote="employer: Texas A&M"),
+        _claim("current_title",
+               "Program Coordinator II - Strategy and Business Services",
+               src="https://pdl/title", method="pdl", quote="title: Program Coordinator II"),
+    ]
+    decisions = [_Decision(
+        "current_employer",
+        "Program Coordinator II - Strategy and Business Services at Texas A&M University",
+        (0, 1), 0,
+    )]
+    out = _apply(resume, decisions)
+    assert sorted(c.claim_type for c in out) == ["current_employer", "current_title"]
+    emp = next(c for c in out if c.claim_type == "current_employer")
+    tit = next(c for c in out if c.claim_type == "current_title")
+    # input claims restored VERBATIM — value, provenance, and method all intact
+    assert emp.value == "Texas A&M University"
+    assert emp.source_url == "https://pdl/emp" and emp.extraction_method == "pdl"
+    assert tit.value == "Program Coordinator II - Strategy and Business Services"
+    assert tit.source_url == "https://pdl/title" and tit.extraction_method == "pdl"
+
+
+def test_apply_splits_employer_swallowed_by_title_blob():
+    """Symmetric direction: the blob lands on current_title and current_employer
+    vanishes — same guard, same verbatim restore."""
+    resume = [
+        _claim("current_employer", "Texas A&M University", src="https://pdl/emp"),
+        _claim("current_title", "Program Coordinator", src="https://pdl/title"),
+    ]
+    decisions = [_Decision(
+        "current_title", "Program Coordinator at Texas A&M University", (0, 1), 1,
+    )]
+    out = _apply(resume, decisions)
+    assert sorted(c.claim_type for c in out) == ["current_employer", "current_title"]
+    emp = next(c for c in out if c.claim_type == "current_employer")
+    tit = next(c for c in out if c.claim_type == "current_title")
+    assert emp.value == "Texas A&M University"
+    assert tit.value == "Program Coordinator"
+
+
+def test_apply_guard_trims_blob_when_no_input_employer_matches():
+    """No input current_employer claim names the blob's org -> the swallowed
+    title is trimmed off the attested blob text instead (never invents)."""
+    resume = [
+        _claim("current_title", "Chief of Staff", src="https://pdl/title", method="pdl"),
+    ]
+    decisions = [_Decision(
+        "current_employer", "Chief of Staff at Dell Technologies", (0,), 0,
+    )]
+    out = _apply(resume, decisions)
+    emp = next(c for c in out if c.claim_type == "current_employer")
+    tit = next(c for c in out if c.claim_type == "current_title")
+    assert emp.value == "Dell Technologies"
+    assert tit.value == "Chief of Staff"
+
+
+def test_apply_guard_leaves_legit_at_in_employer_name_alone():
+    """An employer legitimately containing ' at ' must never be split when the
+    title survived on its own — the guard only fires when a current-role half
+    is MISSING from the output."""
+    resume = [
+        _claim("current_employer", "University of Texas at Austin"),
+        _claim("current_title", "Professor of Finance"),
+    ]
+    decisions = [
+        _Decision("current_employer", "University of Texas at Austin", (0,), 0),
+        _Decision("current_title", "Professor of Finance", (1,), 1),
+    ]
+    out = _apply(resume, decisions)
+    emp = next(c for c in out if c.claim_type == "current_employer")
+    assert emp.value.casefold() == "university of texas at austin"
+    assert len(out) == 2
+
+
+def test_apply_guard_noop_when_input_had_no_title():
+    """Output missing a current_title the input never had -> nothing to restore,
+    nothing invented."""
+    resume = [
+        _claim("current_employer", "Texas A&M University"),
+        _claim("current_employer", "Texas A&M"),
+    ]
+    decisions = [_Decision("current_employer", "Texas A&M University", (0, 1), 0)]
+    out = _apply(resume, decisions)
+    assert [c.claim_type for c in out] == ["current_employer"]
+
+
+def test_apply_keeps_title_when_model_absorbs_it_into_employer():
+    """The model absorbs 'Founder' into the 'Founders Fund' group; between the
+    token-overlap split and the cross-type guard, both claims must survive and
+    the employer must never be mangled into 'Founders'/'s Fund'."""
+    resume = [
+        _claim("current_employer", "Founders Fund", src="https://pdl/emp"),
+        _claim("current_title", "Founder", src="https://pdl/title", conf=0.9),
+    ]
+    decisions = [_Decision("current_employer", "Founders Fund", (0, 1), 0)]
+    out = _apply(resume, decisions)
+    emp = next(c for c in out if c.claim_type == "current_employer")
+    tit = next(c for c in out if c.claim_type == "current_title")
+    assert emp.value == "Founders Fund"
+    assert tit.value == "Founder" and tit.source_url == "https://pdl/title"
+
+
+def test_guard_word_boundary_restores_without_trimming():
+    """Direct guard test: 'Founder' is NOT whole-token inside 'Founders Fund',
+    so the blob must not be trimmed — the missing title is restored verbatim
+    alongside it instead."""
+    from reconcile import _restore_cross_type_current_drops
+    resume = [
+        _claim("current_employer", "Founders Fund", src="https://pdl/emp"),
+        _claim("current_title", "Founder", src="https://pdl/title", conf=0.9),
+    ]
+    rows = [_claim("current_employer", "Founders Fund", src="https://pdl/emp")]
+    out = _restore_cross_type_current_drops(resume, rows)
+    emp = next(c for c in out if c.claim_type == "current_employer")
+    tit = next(c for c in out if c.claim_type == "current_title")
+    assert emp.value == "Founders Fund"
+    assert tit.value == "Founder" and tit.source_url == "https://pdl/title"
+
+
+def test_apply_guard_is_convergent_across_two_passes():
+    """linkedin_refresh reconciles the full set every run: feeding the guard's
+    output back through a worst-case second merge must yield the same two
+    claims, never oscillating."""
+    resume = [
+        _claim("current_employer", "Texas A&M University", src="https://pdl/emp"),
+        _claim("current_title", "Program Coordinator II", src="https://pdl/title"),
+    ]
+    blob = _Decision(
+        "current_employer",
+        "Program Coordinator II at Texas A&M University", (0, 1), 0,
+    )
+    first = _apply(resume, [blob])
+    assert sorted(c.claim_type for c in first) == ["current_employer", "current_title"]
+    second = _apply(first, [blob])  # model misbehaves again on the repaired set
+    assert sorted(c.value for c in second) == sorted(c.value for c in first)
+
+
 def test_tiebreak_is_convergent_across_two_passes():
     """Reconciling the runner's output again must be idempotent (linkedin_refresh
     reconciles the full set on every run). Simulate the second pass on the dated
