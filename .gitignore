@@ -1,6 +1,10 @@
 # Secrets
 .env
 .env.local
+.env*.local
+
+# Vercel CLI local project link + pulled env (created by `vercel link`/`env pull`)
+.vercel
 
 # Python
 pipeline/.venv/
