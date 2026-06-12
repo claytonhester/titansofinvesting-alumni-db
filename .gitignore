@@ -19,6 +19,14 @@ pipeline/data/*.db-wal
 pipeline/data/*.db-shm
 pipeline/data/cache/
 
+# Roster + research datasets — contain real names (the public class directory
+# parsed into rows, plus research targets/logs). Never commit; the pipeline
+# regenerates these from your own source data.
+pipeline/data/*.csv
+pipeline/data/*.jsonl
+pipeline/data/*_targets.json
+pipeline/data/deep_pass_*
+
 # Ad-hoc run logs and probe output (scraped names/results; regenerated per run)
 pipeline/data/run_*.log
 pipeline/data/sonar_*.txt
@@ -37,7 +45,11 @@ pipeline/data/news_experiment.md
 pipeline/data/snapshots/*
 !pipeline/data/snapshots/.gitkeep
 
-# Bundled DB sidecars — commit only web/data/titans.db, never its WAL files
+# Web bundled DB: commit ONLY the synthetic sample.db. The real titans.db is
+# PII and must NEVER be committed to this open-source repo. A production deploy
+# gets the real DB at build time via TITANS_DB_URL (see web/scripts/sync-db.mjs).
+web/data/*.db
+!web/data/sample.db
 web/data/*.db-shm
 web/data/*.db-wal
 web/data/*.db-journal

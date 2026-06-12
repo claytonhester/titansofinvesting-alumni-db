@@ -13,9 +13,14 @@ import path from "node:path";
 // or `<cwd>/web/data/titans.db` depending on which root was in effect. We probe
 // both layouts (plus the local pipeline copy) and use the first that exists.
 //   1. TITANS_DB_PATH env override (explicit wins).
-//   2. <cwd>/data/titans.db          — bundle when tracing root == web/
-//   3. <cwd>/web/data/titans.db      — bundle when tracing root == repo root
-//   4. <cwd>/../pipeline/data/...    — local dev fallback (pre-sync)
+//   2. <cwd>/data/titans.db          — real DB, bundle when tracing root == web/
+//   3. <cwd>/web/data/titans.db      — real DB, bundle when tracing root == repo root
+//   4. <cwd>/data/sample.db          — synthetic fallback (open-source clone)
+//   5. <cwd>/web/data/sample.db      — synthetic fallback (other tracing root)
+//   6. <cwd>/../pipeline/data/...    — local dev fallback (pre-sync)
+//
+// The titans.db candidates come first so a real deploy uses real data; the
+// committed sample.db makes a fresh clone run with fake data out of the box.
 function resolveDbPath(): string {
   const override = process.env.TITANS_DB_PATH;
   if (override) return override;
@@ -23,6 +28,8 @@ function resolveDbPath(): string {
   const candidates = [
     path.join(process.cwd(), "data", "titans.db"),
     path.join(process.cwd(), "web", "data", "titans.db"),
+    path.join(process.cwd(), "data", "sample.db"),
+    path.join(process.cwd(), "web", "data", "sample.db"),
     path.join(process.cwd(), "..", "pipeline", "data", "titans.db"),
   ];
   for (const candidate of candidates) {
