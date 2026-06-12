@@ -118,12 +118,12 @@ _ENTRY_KW = (
 )
 
 
-def _norm(s: str) -> str:
+def normalize(s: str) -> str:
     return " ".join((s or "").lower().strip().split())
 
 
 def _is_finance_employer(employer: str) -> bool:
-    e = f" {_norm(employer)} "
+    e = f" {normalize(employer)} "
     return any(kw in e for kw in _FINANCE_EMPLOYER_KW)
 
 
@@ -131,7 +131,7 @@ def classify_level_keyword(title: str, employer: str = "") -> str:
     """Sector-aware deterministic reading of one role. Order matters: the most
     senior unambiguous signals win first, then the sector-split words, then the
     entry rung; anything left is Non-title."""
-    t = _norm(title)
+    t = normalize(title)
     if not t:
         return NON_TITLE
     if t in _DEPT_LABELS:
@@ -295,11 +295,11 @@ def classify_levels(
     # Dedup on (title, employer); keep the first non-empty sector hint seen.
     hint: dict[tuple[str, str], str] = {}
     for t, e, s in roles:
-        key = (_norm(t), _norm(e))
+        key = (normalize(t), normalize(e))
         if not key[0]:
             continue
-        if key not in hint or (not hint[key] and _norm(s)):
-            hint[key] = _norm(s)
+        if key not in hint or (not hint[key] and normalize(s)):
+            hint[key] = normalize(s)
     distinct = sorted(hint)
     if not distinct:
         return LevelClassification({}, 0, 0)

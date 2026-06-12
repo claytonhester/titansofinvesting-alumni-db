@@ -46,7 +46,7 @@ from seniority_v2 import (
     classify_level_keyword,
     classify_levels,
     level_index,
-    _norm,
+    normalize,
 )
 
 # Ladder generation. Bump when the ladder/prompt changes so the cache is
@@ -88,7 +88,7 @@ def compute_person_levels(
     pre-graduation senior title can't go negative."""
     ranked: list[tuple[int, int | None]] = []  # (level_index, start_year)
     for title, employer, start in roles:
-        lvl = label_map.get((_norm(title), _norm(employer)))
+        lvl = label_map.get((normalize(title), normalize(employer)))
         idx = level_index(lvl) if lvl else None
         if idx is not None:
             ranked.append((idx, start))
@@ -137,9 +137,9 @@ def _role_records_for_person(
 
     def add(title: str, employer: str, start: int | None,
             end: int | None, is_current: bool) -> None:
-        if not _norm(title):
+        if not normalize(title):
             return
-        key = (_norm(title), _norm(employer))
+        key = (normalize(title), normalize(employer))
         cur = merged.get(key)
         if cur is None:
             merged[key] = {
@@ -193,7 +193,7 @@ def _title_key(title: str) -> str:
 def _employers_compatible(a: str, b: str) -> bool:
     """Same role split across sources when one side has no employer, or one
     employer string contains the other ('stephens' vs 'stephens inc')."""
-    a, b = _norm(a), _norm(b)
+    a, b = normalize(a), normalize(b)
     return not a or not b or a in b or b in a
 
 
@@ -223,7 +223,7 @@ def _consolidate(records: list[RoleRecord]) -> list[RoleRecord]:
     for group in by_title.values():
         # Richer employer first, so merges fold into the most complete record.
         kept: list[RoleRecord] = []
-        for r in sorted(group, key=lambda x: len(_norm(x.employer)), reverse=True):
+        for r in sorted(group, key=lambda x: len(normalize(x.employer)), reverse=True):
             for i, k in enumerate(kept):
                 if _employers_compatible(k.employer, r.employer):
                     kept[i] = _merge_records(k, r)
@@ -265,7 +265,7 @@ def main() -> None:
 
     # 2. Classify distinct roles — cache first, Haiku only for misses.
     cached = load_cached(conn, args.version)
-    distinct = {(_norm(t), _norm(e)) for t, e, _ in all_roles if _norm(t)}
+    distinct = {(normalize(t), normalize(e)) for t, e, _ in all_roles if normalize(t)}
     misses = sorted(distinct - set(cached))
     print(f"roles: {len(distinct)} distinct · {len(cached)} cached · {len(misses)} to classify")
 
@@ -275,9 +275,9 @@ def main() -> None:
         # sector hint per missing pair (first seen)
         hint = {}
         for t, e, s in all_roles:
-            k = (_norm(t), _norm(e))
-            if k in set(misses) and (k not in hint or (not hint[k] and _norm(s))):
-                hint[k] = _norm(s)
+            k = (normalize(t), normalize(e))
+            if k in set(misses) and (k not in hint or (not hint[k] and normalize(s))):
+                hint[k] = normalize(s)
         if args.no_llm:
             for (t, e) in misses:
                 lvl = classify_level_keyword(t, e)
@@ -332,8 +332,8 @@ def main() -> None:
             traj = [
                 (
                     r.title, r.employer, r.start_year, r.end_year, int(r.is_current),
-                    label_map.get((_norm(r.title), _norm(r.employer)), ""),
-                    level_index(label_map.get((_norm(r.title), _norm(r.employer)), "")),
+                    label_map.get((normalize(r.title), normalize(r.employer)), ""),
+                    level_index(label_map.get((normalize(r.title), normalize(r.employer)), "")),
                 )
                 for r in records
             ]
