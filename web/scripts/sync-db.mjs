@@ -12,6 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import Database from "better-sqlite3";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.join(here, "..");
@@ -23,13 +24,46 @@ function log(msg) {
   process.stdout.write(`[sync-db] ${msg}\n`);
 }
 
+// The pipeline writes the DB in WAL mode, which CANNOT be opened read-only on a
+// read-only filesystem (Vercel): SQLite must create the -shm/-wal sidecars and
+// fails with "unable to open database file". Fold any pending WAL frames into
+// the main file and switch the shipped snapshot to a plain rollback journal so
+// the serverless runtime can open it read-only with no sidecars at all.
+function makeReadOnlySafe(dbPath) {
+  // Clear any sidecars first: a -shm copied from a live writer carries lock
+  // state and makes the checkpoint fail SQLITE_BUSY. The pipeline checkpoints
+  // before handing off, so the main file already holds all committed data.
+  for (const ext of ["-wal", "-shm"]) {
+    const sidecar = dbPath + ext;
+    if (fs.existsSync(sidecar)) fs.rmSync(sidecar);
+  }
+  const conn = new Database(dbPath);
+  try {
+    conn.pragma("busy_timeout = 5000");
+    conn.pragma("journal_mode = DELETE");
+  } finally {
+    conn.close();
+  }
+  // Drop now-orphaned sidecars so they can't ship or confuse the reader.
+  for (const ext of ["-wal", "-shm"]) {
+    const sidecar = dbPath + ext;
+    if (fs.existsSync(sidecar)) fs.rmSync(sidecar);
+  }
+  const mode = new Database(dbPath, { readonly: true }).pragma("journal_mode", {
+    simple: true,
+  });
+  log(`snapshot journal_mode=${mode} (read-only-safe)`);
+}
+
 if (fs.existsSync(source)) {
   fs.mkdirSync(destDir, { recursive: true });
   fs.copyFileSync(source, dest);
   const kb = Math.round(fs.statSync(dest).size / 1024);
   log(`copied pipeline snapshot -> web/data/titans.db (${kb} KB)`);
+  makeReadOnlySafe(dest);
 } else if (fs.existsSync(dest)) {
   log("pipeline source not in build context — using committed web/data/titans.db");
+  makeReadOnlySafe(dest);
 } else {
   process.stderr.write(
     "[sync-db] FATAL: no titans.db at pipeline/data/ or web/data/. " +
