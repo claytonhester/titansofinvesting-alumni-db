@@ -73,7 +73,10 @@ class CompletenessBreakdown:
 
 
 def _is_linkedin_url(url: str) -> bool:
-    return registrable_host(url) == "linkedin.com"
+    """True only for a PROFILE URL (linkedin.com/in/<slug>). A /posts/ or
+    /pulse/ link is a mention ABOUT the person, not their profile — counting it
+    gave LinkedIn credit to people whose actual profile was never found."""
+    return registrable_host(url) == "linkedin.com" and "/in/" in (url or "")
 
 
 def _career_entry_dated(claim: ClaimRow) -> bool:

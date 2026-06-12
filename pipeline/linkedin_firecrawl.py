@@ -233,7 +233,11 @@ def build_prompt(name: str, employer: str, city: str, profile_url: str = "") -> 
         "work experience history (EVERY role, oldest to newest — for each: job "
         "title, company, and start and end years), education (degree and school), "
         "and the LinkedIn profile URL. Capture every position shown, not just the "
-        "recent ones. "
+        "recent ones. CRITICAL: when someone held MULTIPLE positions at the same "
+        "company (LinkedIn nests them under one company header), return EACH "
+        "position as its own entry with its own title and years — promotions are "
+        "the most important signal here. NEVER collapse a company's positions "
+        "into a single entry spanning the whole tenure. "
     )
     if profile_url.strip():
         # We already hold the exact URL (from PDL or a verified mention). Reading a
