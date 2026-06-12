@@ -101,6 +101,24 @@ python phase2_enrich.py      # enrich a batch
 ./finalize_pass.sh           # sectors → completeness → seniority → snapshot → sync
 ```
 
+### Environment variables
+
+The **site itself needs none** — the directory, Overview, insights, and KPIs run
+off the bundled read-only DB. The **chat** feature needs four (set as a set), and
+a few optional vars have safe defaults. The full contract, with the purpose of
+each and what breaks if it's missing, lives in
+[`web/.env.example`](web/.env.example):
+
+| Variable | For | Notes |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | chat | chat is off without it; site unaffected |
+| `CHAT_TOKEN_SECRET` | chat (prod) | unset → chat gate is forgeable |
+| `UPSTASH_REDIS_REST_URL` / `_TOKEN` | chat on Vercel | shared rate limit + $100/mo spend cap; unset → per-instance, unreliable |
+| `ALLOWED_ORIGIN`, `TITANS_DB_PATH`, `HAIKU_USD_PER_MTOK_IN/OUT` | optional | safe defaults; see `web/.env.example` |
+
+Pipeline keys (Anthropic, PDL, Perplexity, Firecrawl, …) are documented in the
+root [`.env.example`](.env.example).
+
 ---
 
 ## Tech notes
