@@ -1,6 +1,21 @@
-import Database from "better-sqlite3";
+import type DatabaseNs from "better-sqlite3";
+import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
+
+// better-sqlite3 is a NATIVE addon, and it is loaded on FIRST QUERY rather than
+// at module load. A top-level import pulls the .node binary in while the
+// serverless instance is still booting, and on Vercel that reliably aborted the
+// process on cold starts:
+//
+//   node[4]: void node::RemoveEnvironmentCleanupHook(...) at hooks.cc:142
+//   Node.js process exited with signal: 6 (SIGABRT)
+//
+// Every warm request succeeded; every burst that forced new instances produced
+// a batch of 500s. Requiring the addon lazily, inside the request, keeps it out
+// of the boot path. Keep it lazy.
+const requireCjs = createRequire(import.meta.url);
+type DatabaseInstance = DatabaseNs.Database;
 
 // The pipeline owns all writes. The web app opens the SAME SQLite file
 // strictly READ-ONLY — it must never mutate the research database.
@@ -45,10 +60,11 @@ function resolveDbPath(): string {
   return candidates[0];
 }
 
-let _db: Database.Database | null = null;
+let _db: DatabaseInstance | null = null;
 
-function db(): Database.Database {
+function db(): DatabaseInstance {
   if (_db) return _db;
+  const Database = requireCjs("better-sqlite3") as typeof DatabaseNs;
   _db = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
   _db.pragma("query_only = true");
   _db.pragma("busy_timeout = 5000");
