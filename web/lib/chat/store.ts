@@ -12,13 +12,25 @@ import { Redis } from "@upstash/redis";
 
 let _redis: Redis | null | undefined;
 
-// Lazily construct the client once. Returns null when Upstash env vars are
-// absent — callers MUST treat null as "no shared store, use the local path".
+// Two naming conventions reach the same Redis. Provisioning Upstash through the
+// Vercel Marketplace injects KV_REST_API_URL / KV_REST_API_TOKEN; creating the
+// database in Upstash's own dashboard gives UPSTASH_REDIS_REST_URL / _TOKEN.
+// Accept either so the app works however the store was set up. UPSTASH_* wins
+// when both are present, so an explicit override beats the injected pair.
+function redisCredentials(): { url: string; token: string } | null {
+  const url =
+    process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const token =
+    process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  return url && token ? { url, token } : null;
+}
+
+// Lazily construct the client once. Returns null when neither pair is present —
+// callers MUST treat null as "no shared store, use the local path".
 export function redisClient(): Redis | null {
   if (_redis !== undefined) return _redis;
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  _redis = url && token ? new Redis({ url, token }) : null;
+  const creds = redisCredentials();
+  _redis = creds ? new Redis(creds) : null;
   return _redis;
 }
 

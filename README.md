@@ -128,7 +128,7 @@ each and what breaks if it's missing, lives in
 | `TITANS_DB_URL` | prod data | build-time download of the display-only real DB; unset → `sample.db` |
 | `ANTHROPIC_API_KEY` | chat | chat is off without it; site unaffected |
 | `CHAT_TOKEN_SECRET` | chat (prod) | unset → chat gate is forgeable |
-| `UPSTASH_REDIS_REST_URL` / `_TOKEN` | chat on Vercel | shared rate limit + $100/mo spend cap; unset on Vercel (previews too) → chat refuses every request by design |
+| `UPSTASH_REDIS_REST_URL` / `_TOKEN` (or `KV_REST_API_URL` / `_TOKEN`) | chat on Vercel | shared rate limit + $100/mo spend cap; unset on Vercel (previews too) → chat refuses every request by design |
 | `ALLOWED_ORIGIN`, `TITANS_DB_PATH`, `HAIKU_USD_PER_MTOK_IN/OUT` | optional | safe defaults; see `web/.env.example` |
 
 Pipeline keys (Anthropic, PDL, Perplexity, Firecrawl, …) are documented in the
