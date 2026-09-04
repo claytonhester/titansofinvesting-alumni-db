@@ -153,10 +153,10 @@ def test_candidate_url_harvested_from_claims():
     claims = [
         ClaimRow("current_employer", "Acme", "", "", 0.9, "x"),
         ClaimRow("public_links", "LinkedIn",
-                 "https://linkedin.com/in/will-carpenter-13b4b33/", "", 0.8, "pdl"),
+                 "https://linkedin.com/in/reid-stavros-13b4b33/", "", 0.8, "pdl"),
     ]
     assert _candidate_linkedin_url(claims) == \
-        "https://linkedin.com/in/will-carpenter-13b4b33"
+        "https://linkedin.com/in/reid-stavros-13b4b33"
 
 
 def test_no_candidate_url_returns_empty():
@@ -284,10 +284,10 @@ def test_resolve_seed_never_persists_for_ghost_with_zero_claims(monkeypatch):
     With ZERO verified claims there is nothing to anchor the guess — seed it for
     the verifier, but never persist it as a claim."""
     _stub_search(monkeypatch, [
-        LinkedInCandidate("https://linkedin.com/in/ricardo-lopez-12281045", 2.5,
+        LinkedInCandidate("https://linkedin.com/in/mateo-ibarra-12281045", 2.5,
                           "name,slug,employer", "search")])
     url, claim = _resolve_linkedin_seed(object(), "key", _PERSON, [])
-    assert url == "https://linkedin.com/in/ricardo-lopez-12281045"  # still seeds
+    assert url == "https://linkedin.com/in/mateo-ibarra-12281045"  # still seeds
     assert claim is None  # never persisted
 
 

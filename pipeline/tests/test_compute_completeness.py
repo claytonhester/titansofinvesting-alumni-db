@@ -16,15 +16,15 @@ def _c(claim_type, value, source_url="https://example.com/a", quote=""):
 def _full_profile():
     """A Grant-Larkin-grade profile: everything present, all careers dated."""
     return [
-        _c("current_employer", "HealthMark Group"),
+        _c("current_employer", "Ridgeline Health Group"),
         _c("current_title", "Chief Executive Officer"),
         _c("education", "BBA in Finance from Texas A&M University"),
-        _c("career_history", "Chief Executive Officer at HealthMark Group (2018-present)"),
+        _c("career_history", "Chief Executive Officer at Ridgeline Health Group (2018-present)"),
         _c("career_history", "EVP at Caris Life Sciences (2014-2017)"),
         _c("career_history", "Co-Founder & COO at Ubiquitous Energy, Inc. (2011-2014)"),
         _c("short_bio", "B" * (MIN_BIO_CHARS + 10)),
-        _c("news_mention", "2024-01-01 — AHIOS Selects Grant Larkin As New President"),
-        _c("public_links", "Grant Larkin | LinkedIn", source_url="https://www.linkedin.com/in/bart-howe-ab65115"),
+        _c("news_mention", "2024-01-01 — Industry Association Selects Grant Larkin As New President"),
+        _c("public_links", "Grant Larkin | LinkedIn", source_url="https://www.linkedin.com/in/grant-larkin-ab65115"),
     ]
 
 

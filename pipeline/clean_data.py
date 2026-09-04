@@ -35,7 +35,7 @@ NAME_FIXES: dict[int, str] = {
 JUNK_CITIES = {"(unknown)", "unknown", "moved", "n/a", "na", ""}
 # Slug collision: two distinct Arjun Sundaresans (classes 12 & 15) share a slug,
 # which breaks the web /person/[slug] route. Disambiguate the later one.
-SLUG_OVERRIDES: dict[int, str] = {1048: "devan-patel-2"}
+SLUG_OVERRIDES: dict[int, str] = {1048: "arjun-sundaresan-2"}
 
 _ROLE_PREFIXES = ("Entrepreneur,", "Graduate program,")
 _ROLE_ONLY = {"Entrepreneur", "Graduate program"}

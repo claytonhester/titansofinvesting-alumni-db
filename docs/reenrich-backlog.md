@@ -29,9 +29,9 @@ explicitly (e.g. by `--name`) after the Jina-baseline fix and/or a PDL top-up.
 | Person | School | Class | Claims | Note |
 |---|---|---|---|---|
 | Elena Varga | UT | 1 | 0 | no footprint found |
-| Kai Sato | UT | 1 | 1 | has a fintech-panel news item |
+| Kai Sato | UT | 1 | 1 | has one industry-panel news item |
 | Graham Tolliver | A&M | 1 | 2 | |
-| Grant Larkin | A&M | 2 | 2 | **has 2 good news items** (AHIOS President; Entrepreneur of the Year) — résumé thin, press fine |
+| Grant Larkin | A&M | 2 | 2 | **has 2 good news items** (an association presidency; a regional business award) — résumé thin, press fine |
 | Anika Raval | UT | 1 | 3 | **has 2 leadership-move news items** — résumé thin, press fine |
 
 ## 3. THIN — pre-existing (from the 2026-06-09 run, not this batch)

@@ -1,0 +1,235 @@
+[
+  {
+    "person_id": 11,
+    "full_name": "Alex Mitchell",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Nexus Global Advisors",
+      "current_title": "Senior Analyst",
+      "education": [
+        "Bachelor's Degree from Central Texas College"
+      ]
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 14,
+    "full_name": "Jordan Blake",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Sterling Equity Partners",
+      "current_title": "Director"
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 21,
+    "full_name": "Casey Morgan",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Nexus Global Advisors",
+      "current_title": "Senior Analyst",
+      "education": [
+        "Bachelor's Degree from Lone Star College"
+      ]
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 23,
+    "full_name": "Riley Davis",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Frontier Investment Group",
+      "current_title": "Senior Vice President",
+      "education": [
+        "Bachelor's Degree from Central Texas College"
+      ]
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 26,
+    "full_name": "Taylor Adams",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Pinnacle Advisory Corp",
+      "current_title": "Chief Investment Officer",
+      "education": [
+        "Bachelor's Degree from Gulf Coast University"
+      ]
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 31,
+    "full_name": "Morgan Stewart",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Nexus Global Advisors",
+      "current_title": "Senior Analyst",
+      "education": [
+        "Bachelor's Degree from Central Texas College"
+      ]
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 96,
+    "full_name": "Parker Wilson",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Pinnacle Advisory Corp",
+      "current_title": "Chief Investment Officer",
+      "education": [
+        "Bachelor's Degree from State University"
+      ]
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 277,
+    "full_name": "Quinn Foster",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Zenith Capital",
+      "current_title": "Portfolio Manager",
+      "education": [
+        "Bachelor's Degree from Lone Star College"
+      ]
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 435,
+    "full_name": "Cameron Reed",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Compass Financial Solutions",
+      "current_title": "Managing Director",
+      "education": [
+        "Bachelor's Degree from Central Texas College"
+      ]
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 672,
+    "full_name": "Dakota Long",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Titan Asset Management",
+      "current_title": "Vice President",
+      "education": [
+        "Bachelor's Degree from State University"
+      ]
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 741,
+    "full_name": "Skyler Kane",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_title": "Senior Analyst",
+      "education": [
+        "Bachelor's Degree from Lone Star College"
+      ]
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 743,
+    "full_name": "Harper Stone",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Frontier Investment Group",
+      "current_title": "Senior Vice President"
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 771,
+    "full_name": "Avery Knight",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Nexus Global Advisors",
+      "current_title": "Senior Analyst",
+      "education": [
+        "Bachelor's Degree from Central Texas College"
+      ]
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 781,
+    "full_name": "Finley Price",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Nexus Global Advisors",
+      "current_title": "Senior Analyst",
+      "education": [
+        "Bachelor's Degree from Lone Star College"
+      ]
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  },
+  {
+    "person_id": 784,
+    "full_name": "Sage Wright",
+    "verified_on": "2026-09-03",
+    "source": "synthetic-sample",
+    "note": "Synthetic answer-key entry generated from web/data/sample.db (fabricated person). The real answer key lives in the untracked pipeline/eval/gold.json.",
+    "expect": {
+      "current_employer": "Sterling Equity Partners",
+      "current_title": "Director",
+      "education": [
+        "Bachelor's Degree from State University"
+      ]
+    },
+    "must_reject_urls": [],
+    "must_stay_empty": false
+  }
+]

@@ -63,8 +63,8 @@ def test_weak_search_keeps_pdl():
 
 def test_ambiguous_tie_keeps_pdl():
     # The Nora case: 3 equally-corroborated profiles -> don't guess, keep PDL.
-    cands = [_c("annie-stewart-51b", 3.0), _c("annie-stewart-084", 3.0),
-             _c("annie-stewart-173", 3.0)]
+    cands = [_c("nora-whitfield-51b", 3.0), _c("nora-whitfield-084", 3.0),
+             _c("nora-whitfield-173", 3.0)]
     url, why = choose_linkedin_url("https://linkedin.com/in/noraelizabethwhitfield", cands)
     assert url.endswith("/noraelizabethwhitfield") and "ambiguous" in why
 

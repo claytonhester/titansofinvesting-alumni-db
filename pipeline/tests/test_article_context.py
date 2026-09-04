@@ -37,9 +37,9 @@ def test_window_includes_recognition_signal_far_from_name() -> None:
 
 @pytest.mark.unit
 def test_window_falls_back_to_last_name() -> None:
-    text = ("x " * 300) + "Mr. Willmann was mentioned here." + ("y " * 300)
+    text = ("x " * 300) + "Mr. Aldana was mentioned here." + ("y " * 300)
     win = name_window(text, "Trent Aldana", radius=40)
-    assert "Willmann" in win
+    assert "Aldana" in win
 
 
 @pytest.mark.unit

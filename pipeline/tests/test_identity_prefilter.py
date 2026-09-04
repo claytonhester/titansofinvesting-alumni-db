@@ -212,7 +212,7 @@ def test_data_broker_source_is_never_auto_accepted() -> None:
     # A full anchor match (name + company + city) on a known data-broker host must
     # fall through to Sonnet, not auto-accept on echoed boilerplate.
     broker = _src(
-        "https://www.wwana.com/home/4831484-ricardo-lopez/profile",
+        "https://www.wwana.com/home/4831484-mateo-ibarra/profile",
         "Mateo Ibarra — JP Morgan — Dallas, Texas. Find Mateo Ibarra profile.",
     )
     out = prefilter(_BROKER_ANCHORS, (broker,))
@@ -224,7 +224,7 @@ def test_data_broker_source_is_never_auto_accepted() -> None:
 def test_data_broker_subdomain_is_also_excluded() -> None:
     # Subdomains of a broker (app./profiles./api.) must not slip past the host check.
     broker = _src(
-        "https://app.rocketreach.co/person/ricardo-lopez",
+        "https://app.rocketreach.co/person/mateo-ibarra",
         "Mateo Ibarra, JP Morgan, Dallas, Texas.",
     )
     out = prefilter(_BROKER_ANCHORS, (broker,))

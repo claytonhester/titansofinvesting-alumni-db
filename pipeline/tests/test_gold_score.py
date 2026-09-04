@@ -90,7 +90,7 @@ def test_ghost_filled_trips_violation():
 def test_must_reject_url_leak_trips_violation():
     rec = _ghost(must_reject=("wwana.com",))
     claims = [_claim("public_links", "broker echo",
-                     url="https://www.wwana.com/ricardo-lopez")]
+                     url="https://www.wwana.com/mateo-ibarra")]
     res = score_person(rec, claims)
     assert res.violations and "must-reject" in res.violations[0]
 

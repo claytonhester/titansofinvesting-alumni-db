@@ -380,7 +380,7 @@ def test_news_items_drops_broker_echo_news_mentions():
     a curated row even though the identity gate had rejected the same host."""
     claims = [
         _mention("2026-06-01 — Mateo Ibarra — Notable Alumni", "echo",
-                 url="https://www.wwana.com/profile/ricardo-lopez"),
+                 url="https://www.wwana.com/profile/mateo-ibarra"),
         _mention("2026-06-01 — Highest paid employees", "salary row",
                  url="https://govsalaries.com/x"),
         _mention("2026-06-02 — Mateo Ibarra Named CIO of the Year", "real",
@@ -395,7 +395,7 @@ def test_curate_never_curates_broker_echo_even_if_model_would_approve():
     """End-to-end guard: a broker/echo news_mention yields NO curated row (and no
     model spend) regardless of any editor verdict."""
     mentions = [_mention("2026-06-01 — Mateo Ibarra Recognized", "echo",
-                         url="https://wwana.com/profile/ricardo-lopez")]
+                         url="https://wwana.com/profile/mateo-ibarra")]
     approving = _client(
         '[{"index":0,"subject_depth":"feature","category":"Recognition",'
         '"summary":"s","importance":0.9}]'

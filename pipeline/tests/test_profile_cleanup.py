@@ -115,7 +115,7 @@ def test_drops_news_mention_from_broker_echo_host():
     wwana = ClaimRow(
         "news_mention",
         "Mateo Ibarra Profile - Worldwide Association of Notable Alumni",
-        "https://www.wwana.com/home/4831484-ricardo-lopez/profile?skxiu=4831484",
+        "https://www.wwana.com/home/4831484-mateo-ibarra/profile?skxiu=4831484",
         "", 0.6, "sonar_press",
     )
     salary = ClaimRow(

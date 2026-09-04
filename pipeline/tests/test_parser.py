@@ -58,7 +58,7 @@ def test_simple_entry_fields(records):
     assert cason.titan_class == 0
     assert cason.school == "Texas A&M"
     assert cason.needs_review is False
-    assert cason.name_slug == "cason-beckham"
+    assert cason.name_slug == "beckett-rowan"
 
 
 @pytest.mark.unit
@@ -121,8 +121,8 @@ def test_same_name_gets_deterministic_unique_slugs():
     assert len(devans) == 2
     by_class = {r.titan_class: r.name_slug for r in devans}
     # Ordered by titan_class: class 12 keeps the base slug, class 15 gets -2.
-    assert by_class[12] == "devan-patel"
-    assert by_class[15] == "devan-patel-2"
+    assert by_class[12] == "arjun-sundaresan"
+    assert by_class[15] == "arjun-sundaresan-2"
 
 
 @pytest.mark.unit
@@ -135,7 +135,7 @@ def test_slug_assignment_is_stable_across_runs():
 @pytest.mark.unit
 def test_doubled_trailing_surname_is_collapsed():
     recs = parse_directory(_DUP_NAME_HTML, SOURCE_URL)
-    britain = [r for r in recs if r.full_name.startswith("Britain")]
+    britain = [r for r in recs if r.full_name.startswith("Camden")]
     assert len(britain) == 1
     assert britain[0].full_name == "Camden Whitlock"
-    assert britain[0].name_slug == "britain-winchell"
+    assert britain[0].name_slug == "camden-whitlock"

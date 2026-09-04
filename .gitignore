@@ -76,3 +76,8 @@ web/playwright-report/
 
 # OS
 .DS_Store
+
+# Human-verified answer key for the scorecard — contains REAL alumni names, employers
+# and LinkedIn URLs. Never commit. The repo ships pipeline/eval/gold.sample.json
+# (synthetic, built from sample.db) as the stand-in; the real file wins if present.
+pipeline/eval/gold.json

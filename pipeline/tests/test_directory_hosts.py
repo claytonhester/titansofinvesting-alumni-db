@@ -55,8 +55,8 @@ def test_untrusted_identity_matches_bare_domains_subdomains_and_set_subdomains()
 def test_non_news_host_blocks_brokers_and_records_with_subdomains() -> None:
     """Regression (Mateo Ibarra / wwana.com): broker/SEO-echo directories and
     public-records hosts are never news, on bare domains and sub-domains alike."""
-    assert is_non_news_host("https://wwana.com/profile/ricardo-lopez")
-    assert is_non_news_host("https://www.wwana.com/profile/ricardo-lopez")
+    assert is_non_news_host("https://wwana.com/profile/mateo-ibarra")
+    assert is_non_news_host("https://www.wwana.com/profile/mateo-ibarra")
     assert is_non_news_host("https://profiles.zoominfo.com/p/x")   # broker sub-domain
     assert is_non_news_host("https://govsalaries.com/x")           # public records
     assert not is_non_news_host("https://www.barrons.com/articles/x")  # real press
@@ -78,7 +78,7 @@ def test_news_score_aggregator_set_extends_the_shared_core() -> None:
     from news_score import _AGGREGATOR_DOMAINS, is_aggregator_domain
 
     assert NON_NEWS_HOSTS <= _AGGREGATOR_DOMAINS
-    assert is_aggregator_domain("https://www.wwana.com/profile/ricardo-lopez")
+    assert is_aggregator_domain("https://www.wwana.com/profile/mateo-ibarra")
 
 
 @pytest.mark.unit

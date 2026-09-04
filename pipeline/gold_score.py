@@ -27,7 +27,13 @@ from coherence import _company_key
 from config import PIPELINE_DIR
 from enrichment_store import ClaimRow
 
-GOLD_PATH = PIPELINE_DIR / "eval" / "gold.json"
+# The human-verified answer key (real alumni) is PRIVATE: pipeline/eval/gold.json is
+# gitignored and never committed. The repo ships gold.sample.json — a synthetic key
+# built from web/data/sample.db — so the scorecard runs out of the box. The real
+# file wins whenever it is present on disk.
+_PRIVATE_GOLD = PIPELINE_DIR / "eval" / "gold.json"
+_SAMPLE_GOLD = PIPELINE_DIR / "eval" / "gold.sample.json"
+GOLD_PATH = _PRIVATE_GOLD if _PRIVATE_GOLD.exists() else _SAMPLE_GOLD
 
 # A career entry matches when the company matches and both dated years are within
 # this many years of the expected value (sources round/disagree by a year).

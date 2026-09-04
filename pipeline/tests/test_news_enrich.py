@@ -26,7 +26,7 @@ def test_broker_echo_source_skipped_before_model_call():
     zero claims and zero tokens."""
     disc = NewsDiscoveryResult(
         sources=(
-            _source("https://www.wwana.com/home/123-ricardo-lopez/profile"),
+            _source("https://www.wwana.com/home/123-mateo-ibarra/profile"),
             _source("https://govsalaries.com/jane-doe"),
         ),
         credits_spent=0,

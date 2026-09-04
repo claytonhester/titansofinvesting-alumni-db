@@ -105,7 +105,7 @@ def test_broker_echo_domain_dropped_even_if_vouched() -> None:
     in directory_hosts.NON_NEWS_HOSTS must be dropped here, vouched or not."""
     press = [{
         "headline": "Mateo Ibarra — Worldwide Association of Notable Alumni",
-        "url": "https://www.wwana.com/profile/ricardo-lopez",
+        "url": "https://www.wwana.com/profile/mateo-ibarra",
         "date": "2026-06-01",
         "why": "Directory page echoing the queried name.",
         "is_about_this_person": True,

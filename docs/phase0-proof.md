@@ -37,7 +37,7 @@ changes *which* records are retrieved, never what's asserted about them.)
 **Q: "I'm a student who wants to break into private equity — who should I talk to?"**
 > Recommends Trent Aldana (Partner & CIO, Warwick), Jared Holbrook (Sr Director, Capital
 > Creek — "the classic analyst-to-PE pipeline"), Thomas Redding (VP, Brighton Park),
-> Simon Wojcik (the MBA-to-PE transition), Leland Barrow (Sumeru) — each with the
+> Simon Wojcik (the MBA-to-PE transition), Leland Barrow (a growth-equity firm) — each with the
 > specific path that makes them worth contacting, then a concrete next step.
 
 **Q: "Who moved from engineering into finance?"** *(no firm/sector to match — pure semantic)*
