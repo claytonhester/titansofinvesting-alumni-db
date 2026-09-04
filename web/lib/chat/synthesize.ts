@@ -12,6 +12,7 @@ export type StreamEvent =
 const SYNTH_SYSTEM = `You are the Titans of Investing alumni concierge. You help a visitor find specific alumni to connect with, name the firms/organizations those alumni are at, and offer brief, practical framing.
 
 ABSOLUTE RULES:
+- The ALUMNI RECORDS are a SAMPLE, capped at a dozen rows — never the whole directory. NEVER answer "how many" by counting them, and never describe them as the complete set. Every quantity you state must come from DIRECTORY TOTALS, which is authoritative and counts the entire database.
 - Use ONLY the alumni records provided to you in the user message. NEVER use outside knowledge about any person, firm, or industry.
 - NEVER invent names, employers, titles, cities, or career facts. If a detail is not in the records, do not state it.
 - When the provided records are thin or empty, say so plainly (e.g. "The directory is thin on this right now") and offer what little is grounded, rather than guessing.
@@ -85,20 +86,45 @@ function personBlock(r: RetrievedPerson): string {
   return `${header}\n${detail}`;
 }
 
-function rowsToContext(rows: RetrievedPerson[]): string {
+// Real counts from the database, so a "how many" question is answered from the
+// directory rather than from the handful of rows retrieved. Without this the
+// model counted its own sample: asked how many alumni the directory holds, it
+// answered "12" against a roster of over a thousand.
+export interface DirectoryScale {
+  /** Everyone in the directory. */
+  total: number;
+  /** Of those, how many have researched career data. */
+  enriched: number;
+  /** How many match this question's filters (= total when unfiltered). */
+  matched: number;
+}
+
+function scaleBlock(scale: DirectoryScale, shown: number): string {
+  return [
+    "DIRECTORY TOTALS (authoritative — the ONLY source for any number you state):",
+    `- alumni in the directory: ${scale.total}`,
+    `- alumni with researched career data: ${scale.enriched}`,
+    `- alumni matching this question: ${scale.matched}`,
+    `- records shown below: ${shown} (a sample to talk about, NOT a count)`,
+  ].join("\n");
+}
+
+function rowsToContext(rows: RetrievedPerson[], scale: DirectoryScale): string {
+  const head = scaleBlock(scale, rows.length);
   if (rows.length === 0) {
-    return "ALUMNI RECORDS: (none matched — the directory has no grounded matches for this query)";
+    return `${head}\n\nALUMNI RECORDS: (none matched — the directory has no grounded matches for this query)`;
   }
-  return `ALUMNI RECORDS (use ONLY these):\n${rows.map(personBlock).join("\n")}`;
+  return `${head}\n\nALUMNI RECORDS (a sample — use ONLY these for per-person detail):\n${rows.map(personBlock).join("\n")}`;
 }
 
 // Stream the grounded answer token-by-token. Yields text deltas as they arrive,
 // then a final usage event so the caller can log cost.
 export async function* streamAnswer(
   history: ChatTurn[],
-  rows: RetrievedPerson[]
+  rows: RetrievedPerson[],
+  scale: DirectoryScale
 ): AsyncGenerator<StreamEvent> {
-  const context = rowsToContext(rows);
+  const context = rowsToContext(rows, scale);
   const priorTurns = history.slice(0, -1);
   const latest = history[history.length - 1]?.content ?? "";
 

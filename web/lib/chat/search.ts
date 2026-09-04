@@ -1,4 +1,5 @@
 import {
+  countPeople as dbCountPeople,
   searchPeople as dbSearchPeople,
   peopleBySlugs,
   claimsForSlugs,
@@ -33,7 +34,7 @@ export interface RetrievedPerson {
   claims: { claim_type: string; value: string; source_url: string }[];
 }
 
-const RESULT_LIMIT = 12;
+export const RESULT_LIMIT = 12;
 const SEMANTIC_K = 8;
 
 function toRetrieved(r: Person, claims: SlugClaim[]): RetrievedPerson {
@@ -129,4 +130,17 @@ export async function retrievePeople(
   }
 
   return foldClaims(merged.slice(0, RESULT_LIMIT));
+}
+
+// How many alumni match the planner's filters, ignoring RESULT_LIMIT. The chat
+// answers "how many …" from this; the retrieved rows are only a sample.
+export function countMatches(params: SearchParams): number {
+  return dbCountPeople({
+    city: params.city,
+    school: params.school,
+    titanClass: params.titanClass,
+    companyKeyword: params.companyKeyword,
+    sector: params.sector,
+    seniority: params.seniority,
+  });
 }

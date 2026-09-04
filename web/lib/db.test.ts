@@ -124,3 +124,25 @@ describe("directoryStats on a display DB", () => {
     expect(db.directoryStats().reviewQueue).toBe(1);
   });
 });
+
+describe("countPeople", () => {
+  // The chat quotes this for "how many …". Counting the returned rows instead
+  // would report the page size as the size of the directory.
+  it("counts every match, ignoring the row limit", () => {
+    const capped = db.searchPeople({ limit: 2 });
+    expect(capped.length).toBe(2);
+    const total = db.countPeople({});
+    expect(total).toBeGreaterThan(capped.length);
+    expect(total).toBe(db.directoryStats().total);
+  });
+
+  it("applies the same filters as the search", () => {
+    const school = seed.first.school;
+    const rows = db.searchPeople({ school, limit: 500 });
+    expect(db.countPeople({ school })).toBe(rows.length);
+  });
+
+  it("is zero for a filter nothing matches", () => {
+    expect(db.countPeople({ school: "No Such School Anywhere" })).toBe(0);
+  });
+});

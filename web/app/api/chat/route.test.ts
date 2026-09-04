@@ -1,17 +1,27 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const { logTurnShared, isOverCapShared, planQuery, retrievePeople, streamAnswer } =
-  vi.hoisted(() => ({
-    logTurnShared: vi.fn(async () => true),
-    isOverCapShared: vi.fn(async () => false),
-    planQuery: vi.fn(),
-    retrievePeople: vi.fn(async () => []),
-    streamAnswer: vi.fn(),
-  }));
+const {
+  logTurnShared,
+  isOverCapShared,
+  planQuery,
+  retrievePeople,
+  countMatches,
+  directoryStats,
+  streamAnswer,
+} = vi.hoisted(() => ({
+  logTurnShared: vi.fn(async () => true),
+  isOverCapShared: vi.fn(async () => false),
+  planQuery: vi.fn(),
+  retrievePeople: vi.fn(async () => []),
+  countMatches: vi.fn(() => 42),
+  directoryStats: vi.fn(() => ({ total: 1056, enriched: 110 })),
+  streamAnswer: vi.fn(),
+}));
 
 vi.mock("@/lib/chat/cost-guard", () => ({ logTurnShared, isOverCapShared }));
 vi.mock("@/lib/chat/plan", () => ({ planQuery }));
-vi.mock("@/lib/chat/search", () => ({ retrievePeople }));
+vi.mock("@/lib/chat/search", () => ({ retrievePeople, countMatches }));
+vi.mock("@/lib/db", () => ({ directoryStats }));
 vi.mock("@/lib/chat/synthesize", () => ({ streamAnswer }));
 vi.mock("@/lib/chat/guards", () => ({
   MAX_INPUT_CHARS: 500,
@@ -149,5 +159,27 @@ describe("chat route body schema", () => {
     expect(res.status).toBe(400);
     expect(res.headers.get("x-chat-status")).toBe("rejected");
     expect(await res.text()).toContain("couldn't read that request");
+  });
+});
+
+describe("directory scale passed to synthesis", () => {
+  // The counts must reach the synthesizer, or it answers "how many" from the
+  // handful of retrieved rows (it once reported 12 for a 1,056-person roster).
+  it("hands the real totals and the filtered match count to streamAnswer", async () => {
+    planQuery.mockResolvedValue({ params: { city: "Dallas" }, usage: PLAN_USAGE });
+    streamAnswer.mockReturnValue(
+      (async function* () {
+        yield { type: "text", text: "ok" };
+      })()
+    );
+
+    await drain(await POST(request()));
+
+    expect(streamAnswer).toHaveBeenCalledWith(expect.anything(), [], {
+      total: 1056,
+      enriched: 110,
+      matched: 42,
+    });
+    expect(countMatches).toHaveBeenCalledWith({ city: "Dallas" });
   });
 });

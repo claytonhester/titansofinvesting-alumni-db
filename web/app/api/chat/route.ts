@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { planQuery, type ChatTurn } from "@/lib/chat/plan";
-import { retrievePeople } from "@/lib/chat/search";
-import { streamAnswer } from "@/lib/chat/synthesize";
+import { countMatches, retrievePeople } from "@/lib/chat/search";
+import { directoryStats } from "@/lib/db";
+import { streamAnswer, type DirectoryScale } from "@/lib/chat/synthesize";
 import {
   checkInput,
   checkRateShared,
@@ -110,10 +111,19 @@ export async function POST(req: Request): Promise<Response> {
   // Plan (cheap Haiku JSON call) -> retrieve (no model) -> stream synthesis.
   let planUsage = { input_tokens: 0, output_tokens: 0 };
   let rows;
+  // Real directory counts travel with the sample so "how many …" is answered
+  // from the database rather than from the dozen rows retrieved.
+  let scale: DirectoryScale = { total: 0, enriched: 0, matched: 0 };
   try {
     const plan = await planQuery(history);
     planUsage = plan.usage;
     rows = await retrievePeople(plan.params, latest.content);
+    const stats = directoryStats();
+    scale = {
+      total: stats.total,
+      enriched: stats.enriched,
+      matched: countMatches(plan.params),
+    };
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Unexpected error";
     // Surface config problems (missing key) clearly; keep other detail private.
@@ -132,7 +142,7 @@ export async function POST(req: Request): Promise<Response> {
       // the monthly kill-switch can't be undercounted.
       let logged = false;
       try {
-        for await (const event of streamAnswer(history, rows)) {
+        for await (const event of streamAnswer(history, rows, scale)) {
           if (event.type === "text") {
             controller.enqueue(encoder.encode(event.text));
           } else if (event.type === "usage") {

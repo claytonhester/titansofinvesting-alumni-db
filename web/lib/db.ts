@@ -697,9 +697,14 @@ function firmKeywordClause(bindKey: string): string {
   );
 }
 
-// Grounded retrieval for the alumni chat. ALL SQL is owned and parameterized
-// here — the model only ever produces typed params, never SQL. Read-only.
-export function searchPeople(params: PeopleSearchParams): Person[] {
+// Build the WHERE clause + bindings shared by searchPeople (a capped page of
+// rows) and countPeople (how many match in total). They MUST stay in sync: the
+// chat cites the count as the real answer to "how many", while the rows are
+// only the sample it can talk about in detail.
+function peopleFilter(params: PeopleSearchParams): {
+  clause: string;
+  bind: Record<string, unknown>;
+} {
   const where: string[] = [];
   const bind: Record<string, unknown> = {};
 
@@ -752,7 +757,24 @@ export function searchPeople(params: PeopleSearchParams): Person[] {
     bind.seniority = `%${params.seniority.trim().toLowerCase()}%`;
   }
 
-  const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  return { clause: where.length ? `WHERE ${where.join(" AND ")}` : "", bind };
+}
+
+// How many people match these filters, ignoring any row limit. This is what the
+// chat quotes for "how many …" — counting the returned rows would report the
+// page size (12) as the size of the directory.
+export function countPeople(params: PeopleSearchParams): number {
+  const { clause, bind } = peopleFilter(params);
+  const row = db()
+    .prepare(`SELECT COUNT(*) AS n FROM people ${clause}`)
+    .get(bind) as { n: number };
+  return row.n;
+}
+
+// Grounded retrieval for the alumni chat. ALL SQL is owned and parameterized
+// here — the model only ever produces typed params, never SQL. Read-only.
+export function searchPeople(params: PeopleSearchParams): Person[] {
+  const { clause, bind } = peopleFilter(params);
   const rawLimit = params.limit ?? SEARCH_MAX_ROWS;
   const limit = Math.max(1, Math.min(SEARCH_MAX_ROWS, Math.floor(rawLimit)));
 

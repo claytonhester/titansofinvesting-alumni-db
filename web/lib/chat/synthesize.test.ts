@@ -42,13 +42,18 @@ function person(over: Partial<RetrievedPerson> = {}): RetrievedPerson {
   };
 }
 
-async function collect(rows: RetrievedPerson[]) {
+// A directory far larger than any retrieved sample — the whole point of the
+// totals block.
+const SCALE = { total: 1056, enriched: 110, matched: 1056 };
+
+async function collect(rows: RetrievedPerson[], scale = SCALE) {
   streamFn.mockReturnValue(fakeStream(["Hello ", "world"]));
   const text: string[] = [];
   let usage: { input_tokens: number; output_tokens: number } | undefined;
   for await (const ev of streamAnswer(
     [{ role: "user", content: "Who is in Dallas?" }],
-    rows
+    rows,
+    scale
   )) {
     if (ev.type === "text") text.push(ev.text);
     if (ev.type === "usage") usage = ev.usage;
@@ -140,7 +145,7 @@ describe("streamAnswer", () => {
 describe("streamAnswer prior-turn handling", () => {
   async function callWith(history: { role: "user" | "assistant"; content: string }[]) {
     streamFn.mockReturnValue(fakeStream(["ok"]));
-    for await (const ev of streamAnswer(history, [person()])) void ev;
+    for await (const ev of streamAnswer(history, [person()], SCALE)) void ev;
     return streamFn.mock.calls.at(-1)![0];
   }
 
@@ -162,5 +167,38 @@ describe("streamAnswer prior-turn handling", () => {
   it("tells the model prior assistant turns are context only, not facts", async () => {
     const callArg = await callWith([{ role: "user", content: "Who is in Dallas?" }]);
     expect(callArg.system[0].text).toContain("never a source of facts");
+  });
+});
+
+describe("directory totals", () => {
+  // Regression: asked "how many alumni are in the directory?", the model
+  // answered "12" — the size of the retrieved sample — for a roster of 1,056.
+  it("states the real totals and labels the rows as a sample", async () => {
+    await collect([person(), person({ name_slug: "b", full_name: "B B" })]);
+    const sent = streamFn.mock.calls.at(-1)![0];
+    const userMsg = sent.messages[sent.messages.length - 1].content as string;
+    expect(userMsg).toContain("alumni in the directory: 1056");
+    expect(userMsg).toContain("alumni with researched career data: 110");
+    expect(userMsg).toContain("alumni matching this question: 1056");
+    expect(userMsg).toContain("records shown below: 2");
+    expect(userMsg).toMatch(/NOT a count/);
+    const system = sent.system[0].text as string;
+    expect(system).toMatch(/NEVER answer "how many" by counting them/);
+  });
+
+  it("reports a filtered count that exceeds the rows shown", async () => {
+    await collect([person()], { total: 1056, enriched: 110, matched: 37 });
+    const sent = streamFn.mock.calls.at(-1)![0];
+    const userMsg = sent.messages[sent.messages.length - 1].content as string;
+    expect(userMsg).toContain("alumni matching this question: 37");
+    expect(userMsg).toContain("records shown below: 1");
+  });
+
+  it("still carries the totals when nothing matched", async () => {
+    await collect([], { total: 1056, enriched: 110, matched: 0 });
+    const sent = streamFn.mock.calls.at(-1)![0];
+    const userMsg = sent.messages[sent.messages.length - 1].content as string;
+    expect(userMsg).toContain("alumni in the directory: 1056");
+    expect(userMsg).toContain("none matched");
   });
 });
