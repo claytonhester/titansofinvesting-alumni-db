@@ -13,11 +13,16 @@ import { getAlumniInsights, type AlumniInsights } from "./insights";
 import type { NewsFeedData } from "./news-types";
 
 // Everything on the home page that does NOT depend on the request: directory
-// stats, filter options, the insights roll-up, and the news feed. The DB is a
-// read-only snapshot fixed for the life of the deploy, so these aggregates are
-// computed once per process and reused by every request. The page itself
-// stays force-dynamic (it mints a per-request chat token) — this just keeps
-// that dynamism from re-running a dozen full-table scans per hit.
+// stats, filter options, the insights roll-up, and the news feed.
+//
+// These were memoised at module scope once (the DB is a read-only snapshot,
+// fixed for the life of a deploy). That crashed production: holding the query
+// results across requests kept better-sqlite3 objects alive past the end of
+// the invocation, and on Vercel's serverless runtime the native addon aborted
+// during environment teardown (SIGABRT in RemoveEnvironmentCleanupHook),
+// killing ~half of all home-page renders. The queries are a few milliseconds
+// against a small local file, so they run per request. Do NOT reintroduce a
+// process-lifetime cache of anything that comes out of better-sqlite3.
 export interface HomeAggregates {
   stats: DirectoryStats;
   schools: string[];
@@ -28,11 +33,8 @@ export interface HomeAggregates {
   newsTotal: number;
 }
 
-let _aggregates: HomeAggregates | null = null;
-
 export function homeAggregates(): HomeAggregates {
-  if (_aggregates) return _aggregates;
-  _aggregates = {
+  return {
     stats: directoryStats(),
     schools: listSchools(),
     classes: listClasses(),
@@ -41,5 +43,4 @@ export function homeAggregates(): HomeAggregates {
     newsFeed: getNewsFeed(40),
     newsTotal: curatedNewsCount(),
   };
-  return _aggregates;
 }
