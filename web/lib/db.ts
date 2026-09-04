@@ -106,10 +106,49 @@ export function listPeople(filters: DirectoryFilters): Person[] {
   return db().prepare(sql).all(params) as Person[];
 }
 
-export function getPersonBySlug(slug: string): Person | undefined {
-  return db()
+// A slug can be shared by namesakes in different classes. With no class given
+// the earliest class wins, so every existing `/person/<slug>` URL keeps
+// resolving; pass `titanClass` (the `?c=` query personHref emits) to reach a
+// later-class namesake.
+export function getPersonBySlug(
+  slug: string,
+  titanClass?: number
+): Person | undefined {
+  const plain = db()
     .prepare(`SELECT ${COLUMNS} FROM people WHERE name_slug = ? ORDER BY titan_class LIMIT 1`)
     .get(slug) as Person | undefined;
+  if (titanClass === undefined || !Number.isFinite(titanClass)) return plain;
+  // A class only disambiguates a slug shared by namesakes. For a unique slug a
+  // stale or hand-edited ?c= must not 404 the one person it can only mean, so
+  // the class filter applies only when the slug actually collides.
+  if (!collidingSlugs().has(slug)) return plain;
+  return db()
+    .prepare(
+      `SELECT ${COLUMNS} FROM people WHERE name_slug = ? AND titan_class = ? LIMIT 1`
+    )
+    .get(slug, titanClass) as Person | undefined;
+}
+
+let _collidingSlugs: Set<string> | null = null;
+
+// Slugs shared by more than one alum. Memoized per process: the DB is a
+// read-only per-deploy snapshot, so the set cannot change underneath us.
+function collidingSlugs(): Set<string> {
+  if (_collidingSlugs) return _collidingSlugs;
+  const rows = db()
+    .prepare(`SELECT name_slug FROM people GROUP BY name_slug HAVING COUNT(*) > 1`)
+    .all() as { name_slug: string }[];
+  _collidingSlugs = new Set(rows.map((r) => r.name_slug));
+  return _collidingSlugs;
+}
+
+// The canonical profile link for a person. A unique slug keeps the plain
+// `/person/<slug>` form; a slug shared by namesakes gets `?c=<titan_class>` so
+// every alum is reachable. EVERY profile link the app renders goes through here.
+export function personHref(slug: string, titanClass: number): string {
+  return collidingSlugs().has(slug)
+    ? `/person/${slug}?c=${titanClass}`
+    : `/person/${slug}`;
 }
 
 export function listSchools(): string[] {
@@ -147,8 +186,11 @@ export interface DirectoryStats {
   completenessAvg: number;
   /** Enriched people scoring below 60 — the refresh-candidate count. */
   completenessLow: number;
-  /** Identity sources awaiting a human verdict (decision='review'). */
-  reviewQueue: number;
+  /** Identity sources awaiting a human verdict (decision='review'). null when
+   *  the snapshot carries no identity_candidates at all — the public display DB
+   *  (pipeline/make_display_db.py) empties that table, and "0 awaiting review"
+   *  would then be a false claim rather than a count. */
+  reviewQueue: number | null;
 }
 
 /** Profile-quality metrics live in pipeline-written tables that may predate
@@ -159,7 +201,7 @@ function profileQualityStats(): Pick<
 > {
   let completenessAvg = 0;
   let completenessLow = 0;
-  let reviewQueue = 0;
+  let reviewQueue: number | null = null;
   try {
     const row = db()
       .prepare(
@@ -177,10 +219,12 @@ function profileQualityStats(): Pick<
   try {
     const row = db()
       .prepare(
-        `SELECT COUNT(*) AS n FROM identity_candidates WHERE decision = 'review'`
+        `SELECT COUNT(*) AS total,
+                SUM(CASE WHEN decision = 'review' THEN 1 ELSE 0 END) AS review
+         FROM identity_candidates`
       )
-      .get() as { n: number };
-    reviewQueue = row.n;
+      .get() as { total: number; review: number | null };
+    reviewQueue = row.total > 0 ? (row.review ?? 0) : null;
   } catch {
     /* identity_candidates missing in this snapshot */
   }
@@ -205,8 +249,13 @@ export function directoryStats(): DirectoryStats {
       `SELECT COUNT(DISTINCT person_id) AS enriched, COUNT(*) AS claims FROM claims`
     )
     .get() as { enriched: number; claims: number };
+  // Distinct claim sources, not person_sources: the latter is internal research
+  // scaffolding that the public display DB ships empty, whereas claims (and
+  // their source URLs) are exactly what the site already renders.
   const src = db()
-    .prepare(`SELECT COUNT(*) AS sources FROM person_sources`)
+    .prepare(
+      `SELECT COUNT(DISTINCT source_url) AS sources FROM claims WHERE source_url <> ''`
+    )
     .get() as { sources: number };
   return { ...base, ...enr, ...src, ...profileQualityStats() };
 }
@@ -230,35 +279,6 @@ export interface FirmBreakdown {
   count: number;
 }
 
-// The directory's initial_company column is polluted with a handful of
-// school-name artifacts from upstream parsing; exclude them so the
-// "top firms" view reflects actual employers.
-const FIRM_EXCLUDE = ["University of Texas", "Texas A&M", "Baylor University"];
-
-export function topFirms(limit = 10): FirmBreakdown[] {
-  const placeholders = FIRM_EXCLUDE.map(() => "?").join(", ");
-  return db()
-    .prepare(
-      `SELECT initial_company AS company, COUNT(*) AS count FROM people
-       WHERE initial_company <> '' AND initial_company <> '(unknown)'
-         AND initial_company NOT IN (${placeholders})
-       GROUP BY initial_company ORDER BY count DESC LIMIT ?`
-    )
-    .all(...FIRM_EXCLUDE, limit) as FirmBreakdown[];
-}
-
-export function distinctEmployers(): number {
-  const placeholders = FIRM_EXCLUDE.map(() => "?").join(", ");
-  const row = db()
-    .prepare(
-      `SELECT COUNT(DISTINCT initial_company) AS n FROM people
-       WHERE initial_company <> '' AND initial_company <> '(unknown)'
-         AND initial_company NOT IN (${placeholders})`
-    )
-    .get(...FIRM_EXCLUDE) as { n: number };
-  return row.n;
-}
-
 export interface SectorBreakdown {
   sector: string;
   count: number;
@@ -266,9 +286,12 @@ export interface SectorBreakdown {
 
 // Sector classification — the TS mirror of pipeline `sector_classify.py`. Keep
 // INDUSTRY_MAP, SECTOR_RULES, SECTOR_CATCHALL, and SECTOR_NAMES byte-for-byte in
-// sync with that module (a sync test enforces it). Two signals, in priority
+// sync with that module (pipeline/tests/test_sector_sync.py parses these
+// literals out of this file and asserts they match). Two signals, in priority
 // order: PDL industry wins when it maps; otherwise employer-name keywords;
-// otherwise the catch-all.
+// otherwise the catch-all. The web reads the pipeline's STORED sectors for
+// display; only SECTOR_RULES is queried live (searchPeople's facet fallback).
+// INDUSTRY_MAP / classifySector stay here purely as the sync-guarded mirror.
 export const SECTOR_CATCHALL = "Other / Operating";
 
 // PDL `current_industry` -> sector. Checked first; first substring match wins.
@@ -567,7 +590,7 @@ function matchCompany(company: string): string | null {
 }
 
 // PDL industry wins when it maps; else employer-name keywords; else catch-all.
-function classifySector(company: string, industry = ""): string {
+export function classifySector(company: string, industry = ""): string {
   return matchIndustry(industry) ?? matchCompany(company) ?? SECTOR_CATCHALL;
 }
 
@@ -763,27 +786,6 @@ export function loadPersonVectors(): PersonVector[] {
   }));
 }
 
-export function sectorBreakdown(): SectorBreakdown[] {
-  const placeholders = FIRM_EXCLUDE.map(() => "?").join(", ");
-  const rows = db()
-    .prepare(
-      `SELECT initial_company AS company, COUNT(*) AS count FROM people
-       WHERE initial_company <> '' AND initial_company <> '(unknown)'
-         AND initial_company NOT IN (${placeholders})
-       GROUP BY initial_company`
-    )
-    .all(...FIRM_EXCLUDE) as FirmBreakdown[];
-
-  const tally = new Map<string, number>();
-  for (const { company, count } of rows) {
-    const sector = classifySector(company);
-    tally.set(sector, (tally.get(sector) ?? 0) + count);
-  }
-  return [...tally.entries()]
-    .map(([sector, count]) => ({ sector, count }))
-    .sort((a, b) => b.count - a.count);
-}
-
 // VERIFIED first-employer views. The roster's `initial_company` is the
 // program-era listing, not a confirmed first post-grad employer (and is often
 // not a first job at all — current ventures, "Texas A&M" for students). So
@@ -832,6 +834,16 @@ export interface SectorMember {
   titanClass: number;
   employer: string;
   industry: string;
+  // Profile link (namesake-safe, see personHref) — client components render
+  // this rather than rebuilding `/person/<slug>` themselves.
+  href: string;
+}
+
+// Attach the canonical profile link to a member row.
+function withHref<T extends { slug: string; titanClass: number }>(
+  row: T
+): T & { href: string } {
+  return { ...row, href: personHref(row.slug, row.titanClass) };
 }
 
 // Per-person rows behind the LANDING sector card: current employer + raw PDL
@@ -856,7 +868,8 @@ export function landingSectorMembers(): SectorMember[] {
          WHERE TRIM(COALESCE(pi.current_sector, '')) <> ''
          ORDER BY pi.current_sector, p.full_name`
       )
-      .all() as SectorMember[];
+      .all()
+      .map((r) => withHref(r as Omit<SectorMember, "href">));
   } catch {
     return [];
   }
@@ -869,6 +882,8 @@ export interface KpiMember {
   slug: string;
   school: string;
   titanClass: number;
+  // Profile link (namesake-safe, see personHref).
+  href: string;
   // KPI-specific context line (role · firm, "N yrs to MD", current city, …).
   detail: string;
   // Raw numeric for distribution KPIs (years_to_senior_leadership, tenure); null otherwise — so
@@ -989,6 +1004,7 @@ export function kpiMembers(key: string): KpiMember[] {
     slug: r.slug,
     school: r.school,
     titanClass: r.titanClass,
+    href: personHref(r.slug, r.titanClass),
     detail: kpiDetail(key as KpiKey, r),
     metric:
       key === "years_to_senior_leadership"
@@ -1018,24 +1034,11 @@ export function firstJobSectorMembers(): SectorMember[] {
          WHERE TRIM(COALESCE(pi.first_sector, '')) <> ''
          ORDER BY pi.first_sector, p.full_name`
       )
-      .all() as SectorMember[];
+      .all()
+      .map((r) => withHref(r as Omit<SectorMember, "href">));
   } catch {
     return [];
   }
-}
-
-export interface ClassSpread {
-  titan_class: number;
-  count: number;
-}
-
-export function classSpread(): ClassSpread[] {
-  return db()
-    .prepare(
-      `SELECT titan_class, COUNT(*) AS count FROM people
-       GROUP BY titan_class ORDER BY titan_class`
-    )
-    .all() as ClassSpread[];
 }
 
 export interface GeoSpread {
@@ -1098,37 +1101,6 @@ export function recentlyEnriched(limit = 6): EnrichedPerson[] {
        GROUP BY p.id ORDER BY claim_count DESC LIMIT ?`
     )
     .all(limit) as EnrichedPerson[];
-}
-
-export interface NewsMention {
-  name_slug: string;
-  full_name: string;
-  school: string;
-  titan_class: number;
-  value: string;
-  source_url: string;
-  quote: string;
-}
-
-// news_mention claims are name-matched (GNews), NOT identity-verified —
-// surfaced in a clearly-labeled "In the news" view, never the verified résumé.
-export function recentNews(limit = 40): NewsMention[] {
-  return db()
-    .prepare(
-      `SELECT p.name_slug, p.full_name, p.school, p.titan_class,
-              c.value, c.source_url, c.quote
-       FROM claims c JOIN people p ON p.id = c.person_id
-       WHERE c.claim_type = 'news_mention'
-       ORDER BY c.value DESC LIMIT ?`
-    )
-    .all(limit) as NewsMention[];
-}
-
-export function newsCount(): number {
-  const row = db()
-    .prepare(`SELECT COUNT(*) AS n FROM claims WHERE claim_type = 'news_mention'`)
-    .get() as { n: number };
-  return row.n;
 }
 
 // The CURATED news feed: the Haiku news agent's category + summary + importance
@@ -1218,9 +1190,10 @@ export function getClaimsForPerson(personId: number): Claim[] {
 
 // The Phase-3 aggregate roll-up (one row per year, written by the pipeline's
 // phase3_insights pass). Mirrors pipeline/insights_store.InsightsSnapshot. The
-// scalar columns plus the deserialized JSON payload drive the real half of the
-// "Overview & Insights" view once enrichment coverage is high enough that the
-// pipeline flips is_sample to 0.
+// scalar columns plus the deserialized JSON payload drive the outcome half of
+// the "Overview & Insights" view as soon as the snapshot reports at least one
+// enriched person (see lib/insights.ts — the is_sample coverage flag is
+// carried through but not gated on).
 export interface InsightsSnapshot {
   snapshot_year: number;
   people_total: number;
@@ -1247,8 +1220,8 @@ interface SnapshotRow {
 }
 
 // The insights_snapshot table does not exist until the pipeline's phase3 pass
-// has run at least once. Until then this returns null and the web keeps its
-// seeded illustration — never throws on the missing table.
+// has run at least once. Until then this returns null and the Overview renders
+// its empty states — never throws on the missing table.
 export function latestInsightsSnapshot(): InsightsSnapshot | null {
   let row: SnapshotRow | undefined;
   try {
@@ -1484,29 +1457,4 @@ export function titansAtCompany(domain: string): {
     current: rows.filter((r) => r.is_current_int).map(norm),
     past: rows.filter((r) => !r.is_current_int).map(norm),
   };
-}
-
-// Top employers by # of Titans, joined to their enriched firm record (for the
-// overview leaderboard with clickable company pages).
-export interface TopCompany extends Company {
-  count: number;
-}
-
-export function topCompanies(limit = 12): TopCompany[] {
-  try {
-    const rows = db()
-      .prepare(
-        `SELECT c.*, COUNT(pi.person_id) AS count
-         FROM companies c
-         JOIN person_insights pi ON pi.employer_domain = c.domain
-         WHERE c.matched = 1
-         GROUP BY c.domain
-         ORDER BY count DESC, c.employee_count DESC
-         LIMIT ?`
-      )
-      .all(limit) as (CompanyRow & { count: number })[];
-    return rows.map((r) => ({ ...toCompany(r), count: r.count }));
-  } catch {
-    return [];
-  }
 }

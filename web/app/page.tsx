@@ -1,15 +1,7 @@
 import Link from "next/link";
-import {
-  directoryStats,
-  listClasses,
-  listPeople,
-  listSchools,
-  recentlyEnriched,
-  curatedNewsCount,
-} from "@/lib/db";
-import { getNewsFeed } from "@/lib/news";
-import { getAlumniInsights } from "@/lib/insights";
-import { mintChatToken } from "@/lib/chat/auth";
+import { listPeople, personHref } from "@/lib/db";
+import { homeAggregates } from "@/lib/home-data";
+import { chatAuthConfigured, mintChatToken } from "@/lib/chat/auth";
 import Filters from "./filters";
 import Tabs from "./tabs";
 import NewsFeed from "./news-feed";
@@ -46,13 +38,9 @@ export default async function Home({
   // Default ON: only people we have data on. The user turns it off with enriched=0.
   const enrichedOnly = sp.enriched !== "0";
 
-  const stats = directoryStats();
-  const schools = listSchools();
-  const classes = listClasses();
-  const enriched = recentlyEnriched(6);
-  const insights = getAlumniInsights();
-  const newsFeed = getNewsFeed(40);
-  const newsTotal = curatedNewsCount();
+  // Request-independent aggregates, memoized per process (see lib/home-data).
+  const { stats, schools, classes, enriched, insights, newsFeed, newsTotal } =
+    homeAggregates();
   const people = listPeople({
     q: q || undefined,
     school: school || undefined,
@@ -77,7 +65,7 @@ export default async function Home({
             source-attributed career data.
           </p>
 
-          <ChatBar token={mintChatToken()} />
+          <ChatBar token={chatAuthConfigured() ? mintChatToken() : null} />
         </div>
       </header>
 
@@ -156,7 +144,10 @@ export default async function Home({
               </div>
               <div className="enriched-people">
                 {enriched.map((p) => (
-                  <Link key={p.name_slug} href={`/person/${p.name_slug}`}>
+                  <Link
+                    key={`${p.name_slug}-${p.titan_class}`}
+                    href={personHref(p.name_slug, p.titan_class)}
+                  >
                     <span className="who">{p.full_name}</span>
                     <span className="badge">{p.claim_count} claims</span>
                   </Link>
@@ -174,10 +165,12 @@ export default async function Home({
                   <div className="n">{stats.completenessLow}</div>
                   <div className="l">Below 60 — refresh candidates</div>
                 </div>
-                <div className="stat-cell">
-                  <div className="n">{stats.reviewQueue}</div>
-                  <div className="l">Identity sources awaiting review</div>
-                </div>
+                {stats.reviewQueue !== null && (
+                  <div className="stat-cell">
+                    <div className="n">{stats.reviewQueue}</div>
+                    <div className="l">Identity sources awaiting review</div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -198,7 +191,7 @@ export default async function Home({
               {people.map((p) => (
                 <Link
                   key={p.id}
-                  href={`/person/${p.name_slug}`}
+                  href={personHref(p.name_slug, p.titan_class)}
                   className="card"
                 >
                   <div className="card-id">

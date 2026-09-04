@@ -62,24 +62,40 @@ function capitalizeWord(word: string): string {
     .join("&");
 }
 
+// Longest all-caps token that still reads as an acronym ("CFA", "KBRE", "PLLC").
+// Anything longer in caps ("BLACKSTONE") is a shouted word, not an acronym.
+const MAX_ACRONYM_LEN = 5;
+
 function isAllCapsAcronym(core: string): boolean {
   return (
     core.length > 1 &&
+    core.length <= MAX_ACRONYM_LEN &&
     /^[A-Za-z]+$/.test(core) &&
     core === core.toUpperCase()
   );
 }
 
+// True when the WHOLE string is an ALL-CAPS phrase ("SENIOR VICE PRESIDENT"):
+// two or more lettered tokens, every one uppercase. That is a shouted
+// headline, not a run of acronyms, so it title-cases like any other text
+// (curated acronyms still come out uppercase: "... PRESIDENT, CFA" -> "..., CFA").
+function isAllCapsPhrase(cores: string[]): boolean {
+  const words = cores.filter((c) => /[A-Za-z]/.test(c));
+  return words.length >= 2 && words.every((w) => w === w.toUpperCase());
+}
+
 function isAlreadyMixedCase(core: string): boolean {
   // An uppercase letter after the first char means the source set it
-  // deliberately (McCallum, DeVos, "A&M").
-  return /[A-Z]/.test(core.slice(1));
+  // deliberately (McCallum, DeVos, "A&M") — unless the whole token is caps,
+  // which is a shout, not a deliberate mix.
+  return /[A-Z]/.test(core.slice(1)) && core !== core.toUpperCase();
 }
 
 /**
  * Title-case a string with investment-domain awareness. Idempotent.
  *
- * Priority: all-caps acronyms and already-mixed-case tokens are preserved;
+ * Priority: short all-caps acronyms (≤5 letters) and already-mixed-case tokens
+ * are preserved — except inside an ALL-CAPS phrase, which is title-cased whole;
  * curated acronyms and roman numerals go uppercase; minor words stay lowercase
  * unless first; everything else is capitalized (&-aware).
  *
@@ -87,13 +103,14 @@ function isAlreadyMixedCase(core: string): boolean {
  */
 export function smartTitle(value: string | null | undefined): string {
   if (!value) return value ?? "";
-  const tokens = value.trim().split(/\s+/);
-  return tokens
-    .map((token, i) => {
-      const { prefix, core, suffix } = splitToken(token);
+  const parts = value.trim().split(/\s+/).map(splitToken);
+  const shouted = isAllCapsPhrase(parts.map((p) => p.core));
+  return parts
+    .map(({ prefix, core, suffix }, i) => {
+      const token = prefix + core + suffix;
       if (!core) return token;
-      if (isAllCapsAcronym(core)) return token;
-      if (isAlreadyMixedCase(core)) return token;
+      if (!shouted && isAllCapsAcronym(core)) return token;
+      if (!shouted && isAlreadyMixedCase(core)) return token;
 
       const lower = core.toLowerCase();
       if (ACRONYMS.has(lower)) return prefix + lower.toUpperCase() + suffix;

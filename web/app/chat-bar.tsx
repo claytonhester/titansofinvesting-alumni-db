@@ -21,7 +21,8 @@ const PLACEHOLDER_INTERVAL_MS = 4200;
 // Render assistant text with inline [label](/person/slug) links turned into
 // clickable chips. Everything else is plain text; we keep this deliberately
 // small rather than pulling in a markdown dependency.
-const LINK_RE = /\[([^\]]+)\]\((\/person\/[a-z0-9-]+)\)/gi;
+// The optional `?c=<class>` suffix is how namesakes are disambiguated.
+const LINK_RE = /\[([^\]]+)\]\((\/person\/[a-z0-9-]+(?:\?c=\d+)?)\)/gi;
 
 function renderContent(text: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
@@ -49,8 +50,13 @@ function renderContent(text: string): React.ReactNode[] {
 interface ChatBarProps {
   // Signed, short-lived token minted during server render of the page. Echoed
   // back on every request so the endpoint can verify the caller loaded the page.
-  token: string;
+  // null when the server has no signing secret (production without
+  // CHAT_TOKEN_SECRET): the bar renders disabled instead of firing requests
+  // the endpoint would reject.
+  token: string | null;
 }
+
+const UNAVAILABLE_PLACEHOLDER = "Alumni chat is unavailable right now.";
 
 export default function ChatBar({ token }: ChatBarProps) {
   const [placeholderIdx, setPlaceholderIdx] = useState(0);
@@ -72,9 +78,11 @@ export default function ChatBar({ token }: ChatBarProps) {
     panelRef.current?.scrollTo({ top: panelRef.current.scrollHeight });
   }, [messages]);
 
+  const available = token !== null;
+
   async function send() {
     const question = input.trim();
-    if (!question || streaming) return;
+    if (!question || streaming || token === null) return;
 
     const nextHistory: ChatMessage[] = [
       ...messages,
@@ -141,15 +149,17 @@ export default function ChatBar({ token }: ChatBarProps) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={PLACEHOLDERS[placeholderIdx]}
+          placeholder={
+            available ? PLACEHOLDERS[placeholderIdx] : UNAVAILABLE_PLACEHOLDER
+          }
           maxLength={500}
-          disabled={streaming}
+          disabled={streaming || !available}
           aria-label="Ask about Titans of Investing alumni"
         />
         <button
           className="chat-send"
           onClick={send}
-          disabled={streaming || input.trim().length === 0}
+          disabled={streaming || !available || input.trim().length === 0}
           aria-label="Ask"
         >
           {streaming ? "…" : "Ask"}

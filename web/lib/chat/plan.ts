@@ -79,6 +79,25 @@ export function coerceParams(obj: Record<string, unknown>): SearchParams {
 
 const PLAN_MAX_TOKENS = 200;
 
+// Only the visitor's OWN turns reach the planner. Assistant turns arrive from
+// the client verbatim and are untrusted — forwarding them would let a caller
+// steer the planner with a fabricated "assistant" message. Earlier questions
+// are folded into a single user message so follow-ups ("what about NYC?")
+// still resolve against what was asked before.
+export function plannerMessage(history: ChatTurn[]): string {
+  const questions = history
+    .filter((t) => t.role === "user")
+    .map((t) => t.content.trim())
+    .filter(Boolean);
+  const latest = questions.pop() ?? "";
+  if (questions.length === 0) return latest;
+  return (
+    `EARLIER QUESTIONS (context for follow-ups only):\n` +
+    `${questions.map((q) => `- ${q}`).join("\n")}\n\n` +
+    `CURRENT QUESTION: ${latest}`
+  );
+}
+
 // One cheap Haiku call. History is trimmed to the recent turns by the caller.
 export async function planQuery(history: ChatTurn[]): Promise<PlanResult> {
   const response = await anthropic().messages.create({
@@ -87,7 +106,7 @@ export async function planQuery(history: ChatTurn[]): Promise<PlanResult> {
     system: [
       { type: "text", text: PLAN_SYSTEM, cache_control: { type: "ephemeral" } },
     ],
-    messages: history.map((t) => ({ role: t.role, content: t.content })),
+    messages: [{ role: "user", content: plannerMessage(history) }],
   });
 
   const block = response.content[0];

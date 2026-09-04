@@ -1,4 +1,4 @@
-import { curatedNews, type CuratedNewsRow } from "./db";
+import { curatedNews, personHref, type CuratedNewsRow } from "./db";
 import { NEWS_CATEGORIES, type NewsCategory } from "./news-types";
 import type { NewsItem, NewsFeedData } from "./news-types";
 
@@ -29,10 +29,11 @@ function toNewsItem(row: CuratedNewsRow, index: number): NewsItem {
     sourceHost: row.source_host,
     date: row.date,
     relevance: row.importance,
+    href: personHref(row.name_slug, row.titan_class),
   };
 }
 
 export function getNewsFeed(limit = 40): NewsFeedData {
   const rows = curatedNews(limit);
-  return { items: rows.map(toNewsItem), isSample: false };
+  return { items: rows.map(toNewsItem) };
 }

@@ -1,5 +1,38 @@
+const isDev = process.env.NODE_ENV !== "production";
+
+// Content-Security-Policy. The app loads nothing third-party: no external
+// scripts, fonts, images, or fetches — everything is same-origin.
+//   script-src: Next's hydration / RSC flight payload is inline <script>, so
+//     'unsafe-inline' is required without a per-request nonce (which needs
+//     middleware and costs static optimisation). Dev adds 'unsafe-eval' for
+//     React Refresh only.
+//   style-src: 'unsafe-inline' for the style={{ width }} meter/bar fills in
+//     page.tsx, insights-views.tsx, and kpi-modal.tsx.
+const csp = [
+  "default-src 'self'",
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+const securityHeaders = [
+  { key: "Content-Security-Policy", value: csp },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+];
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  async headers() {
+    return [{ source: "/:path*", headers: securityHeaders }];
+  },
   // Native / heavy modules kept external to the server bundle: better-sqlite3
   // (native addon) and the in-process embedding model (onnxruntime backend).
   serverExternalPackages: ["better-sqlite3", "@xenova/transformers"],

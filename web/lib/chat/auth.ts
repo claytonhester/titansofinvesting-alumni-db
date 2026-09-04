@@ -24,35 +24,52 @@ const TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
 const REJECT_MESSAGE =
   "This chat can only be used from the Titans alumni site. Please reload the page and try again.";
 
-// Dev fallback keeps local/test working without config; production MUST set
-// CHAT_TOKEN_SECRET (an unset secret in prod means forgeable tokens).
-function secret(): string {
-  return process.env.CHAT_TOKEN_SECRET || "dev-insecure-chat-token-secret";
+const DEV_SECRET = "dev-insecure-chat-token-secret";
+
+// Production MUST set CHAT_TOKEN_SECRET. When it is unset there, there is NO
+// secret (null): minting is disabled and every token fails to verify, so the
+// gate fails CLOSED instead of silently falling back to the public dev value
+// (which would make tokens forgeable by anyone who reads this file). Local
+// dev and tests keep the fallback so they work with zero config.
+function secret(): string | null {
+  const configured = process.env.CHAT_TOKEN_SECRET;
+  if (configured) return configured;
+  return process.env.NODE_ENV === "production" ? null : DEV_SECRET;
 }
 
-function sign(payload: string): string {
-  return crypto.createHmac("sha256", secret()).update(payload).digest("base64url");
+// True when tokens can be minted/verified in this environment. The page uses
+// it to render the chat as unavailable rather than shipping a dead token.
+export function chatAuthConfigured(): boolean {
+  return secret() !== null;
+}
+
+function sign(payload: string, key: string): string {
+  return crypto.createHmac("sha256", key).update(payload).digest("base64url");
 }
 
 // `${expiryMs}.${signature}` — the signature covers the expiry so it can't be
-// extended by the client.
+// extended by the client. Returns "" (never a forgeable token) when no secret
+// is configured; "" fails verification, so the endpoint stays closed.
 export function mintChatToken(now: number = Date.now()): string {
+  const key = secret();
+  if (!key) return "";
   const exp = String(now + TOKEN_TTL_MS);
-  return `${exp}.${sign(exp)}`;
+  return `${exp}.${sign(exp, key)}`;
 }
 
 export function verifyChatToken(
   token: string | null | undefined,
   now: number = Date.now()
 ): boolean {
-  if (!token) return false;
+  const key = secret();
+  if (!key || !token) return false;
   const dot = token.indexOf(".");
   if (dot <= 0) return false;
   const expStr = token.slice(0, dot);
   const sig = token.slice(dot + 1);
   const exp = Number(expStr);
   if (!Number.isFinite(exp) || exp < now) return false;
-  const expected = sign(expStr);
+  const expected = sign(expStr, key);
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   if (a.length !== b.length) return false;

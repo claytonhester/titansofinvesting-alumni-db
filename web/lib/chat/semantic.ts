@@ -38,11 +38,6 @@ function vectors(): PersonVector[] {
   return vectorCache;
 }
 
-// Visible for tests / explicit refresh after a re-embed within a long-lived process.
-export function resetSemanticCache(): void {
-  vectorCache = null;
-}
-
 async function embedQuery(query: string): Promise<Float32Array | null> {
   const extractor = await getExtractor();
   if (!extractor) return null;

@@ -14,6 +14,7 @@
 //      sample.db, so an open-source clone "just works" with fake data.
 //
 // Every DB we hand off is made read-only-safe (rollback journal, no sidecars).
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,16 +27,56 @@ const destDir = path.join(webRoot, "data");
 const dest = path.join(destDir, "titans.db");
 const sample = path.join(destDir, "sample.db");
 const dbUrl = process.env.TITANS_DB_URL;
+// Optional hex SHA-256 of the file at TITANS_DB_URL. When set, a download that
+// doesn't match is refused — so a swapped or truncated object can't ship.
+const dbSha256 = process.env.TITANS_DB_SHA256;
 
 function log(msg) {
   process.stdout.write(`[sync-db] ${msg}\n`);
+}
+
+// The private DB URL must be https: a plain-http fetch of the entire research
+// database could be read or replaced in transit.
+function requireHttps(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`TITANS_DB_URL is not a valid URL: ${url}`);
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`TITANS_DB_URL must use https: (got ${parsed.protocol})`);
+  }
+  return parsed;
+}
+
+function journalMode(dbPath) {
+  const conn = new Database(dbPath, { readonly: true });
+  try {
+    return conn.pragma("journal_mode", { simple: true });
+  } finally {
+    conn.close();
+  }
 }
 
 // SQLite in WAL mode CANNOT be opened read-only on a read-only filesystem
 // (Vercel): it must create -shm/-wal sidecars and fails with "unable to open
 // database file". Switch the shipped DB to a plain rollback journal so the
 // serverless runtime opens it read-only with no sidecars at all.
+//
+// A file already in DELETE mode with no sidecars is left untouched — never
+// opened for writing — so a committed, read-only-safe snapshot (sample.db) is
+// not rewritten (and the working tree not dirtied) on every build.
 function makeReadOnlySafe(dbPath) {
+  const hasSidecar = ["-wal", "-shm"].some((ext) => fs.existsSync(dbPath + ext));
+  if (!hasSidecar && journalMode(dbPath) === "delete") {
+    log(`${path.basename(dbPath)} already journal_mode=delete (read-only-safe)`);
+    return true;
+  }
+  return false;
+}
+
+function convertToRollbackJournal(dbPath) {
   // Clear sidecars first: a -shm copied from a live writer carries lock state
   // and makes the conversion fail SQLITE_BUSY.
   for (const ext of ["-wal", "-shm"]) {
@@ -53,10 +94,13 @@ function makeReadOnlySafe(dbPath) {
     const sidecar = dbPath + ext;
     if (fs.existsSync(sidecar)) fs.rmSync(sidecar);
   }
-  const mode = new Database(dbPath, { readonly: true }).pragma("journal_mode", {
-    simple: true,
-  });
-  log(`${path.basename(dbPath)} journal_mode=${mode} (read-only-safe)`);
+  log(`${path.basename(dbPath)} journal_mode=${journalMode(dbPath)} (read-only-safe)`);
+}
+
+// Snapshots we own (downloaded / copied into web/data/titans.db) may be
+// rewritten in place; a tracked file must not be.
+function ensureReadOnlySafe(dbPath) {
+  if (!makeReadOnlySafe(dbPath)) convertToRollbackJournal(dbPath);
 }
 
 async function downloadTo(url, outPath) {
@@ -65,6 +109,15 @@ async function downloadTo(url, outPath) {
     throw new Error(`TITANS_DB_URL fetch failed: ${res.status} ${res.statusText}`);
   }
   const buf = Buffer.from(await res.arrayBuffer());
+  if (dbSha256) {
+    const actual = crypto.createHash("sha256").update(buf).digest("hex");
+    if (actual !== dbSha256.trim().toLowerCase()) {
+      throw new Error(
+        `TITANS_DB_SHA256 mismatch: expected ${dbSha256.trim().toLowerCase()}, got ${actual} — refusing to ship the download`
+      );
+    }
+    log(`sha256 verified (${actual.slice(0, 12)}…)`);
+  }
   fs.writeFileSync(outPath, buf);
   return buf.length;
 }
@@ -72,19 +125,29 @@ async function downloadTo(url, outPath) {
 fs.mkdirSync(destDir, { recursive: true });
 
 if (dbUrl) {
+  requireHttps(dbUrl);
   const bytes = await downloadTo(dbUrl, dest);
   log(`downloaded real DB from TITANS_DB_URL -> web/data/titans.db (${Math.round(bytes / 1024)} KB)`);
-  makeReadOnlySafe(dest);
+  ensureReadOnlySafe(dest);
 } else if (fs.existsSync(source)) {
   fs.copyFileSync(source, dest);
   log(`copied pipeline snapshot -> web/data/titans.db (${Math.round(fs.statSync(dest).size / 1024)} KB)`);
-  makeReadOnlySafe(dest);
+  ensureReadOnlySafe(dest);
 } else if (fs.existsSync(dest)) {
   log("pipeline source not in build context — using committed web/data/titans.db");
-  makeReadOnlySafe(dest);
+  ensureReadOnlySafe(dest);
 } else if (fs.existsSync(sample)) {
   log("no real DB available — app will use the synthetic web/data/sample.db");
-  makeReadOnlySafe(sample);
+  // sample.db is a TRACKED file: verify it is already read-only-safe rather
+  // than rewriting it in place. Regenerate it if this ever fails.
+  if (!makeReadOnlySafe(sample)) {
+    process.stderr.write(
+      "[sync-db] FATAL: web/data/sample.db is not in journal_mode=delete (or has " +
+        "-wal/-shm sidecars). Regenerate it with `python pipeline/make_sample_db.py` " +
+        "instead of rewriting the tracked file.\n"
+    );
+    process.exit(1);
+  }
 } else {
   process.stderr.write(
     "[sync-db] FATAL: no real titans.db (TITANS_DB_URL / pipeline / web) and no " +

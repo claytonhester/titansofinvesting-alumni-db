@@ -223,7 +223,7 @@ export default function KpiModal({
             <div className="kpi-people">
               {people.map((m) => (
                 <Link
-                  href={`/person/${m.slug}`}
+                  href={m.href}
                   className="sector-member"
                   key={`${m.slug}-${m.name}`}
                 >

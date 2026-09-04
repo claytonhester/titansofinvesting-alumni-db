@@ -2,7 +2,13 @@ import { z } from "zod";
 import { planQuery, type ChatTurn } from "@/lib/chat/plan";
 import { retrievePeople } from "@/lib/chat/search";
 import { streamAnswer } from "@/lib/chat/synthesize";
-import { checkInput, checkRateShared, checkTopic, rejection } from "@/lib/chat/guards";
+import {
+  checkInput,
+  checkRateShared,
+  checkTopic,
+  MAX_INPUT_CHARS,
+  rejection,
+} from "@/lib/chat/guards";
 import { isOverCapShared, logTurnShared } from "@/lib/chat/cost-guard";
 import { checkAuth } from "@/lib/chat/auth";
 
@@ -11,16 +17,27 @@ export const runtime = "nodejs";
 
 const MAX_HISTORY_TURNS = 8;
 
+// Per-turn size caps enforced at the schema boundary, so an oversized EARLIER
+// turn is rejected (400) before any model call — the checkInput guard below
+// only covers the latest turn. User turns share the ChatBar's 500-char limit
+// (MAX_INPUT_CHARS); assistant turns are echoes of our own ≤500-token answers,
+// so they get 4× that. Anything larger is not a real conversation transcript.
+const MAX_USER_TURN_CHARS = MAX_INPUT_CHARS;
+const MAX_ASSISTANT_TURN_CHARS = MAX_INPUT_CHARS * 4;
+
+const turnSchema = z.discriminatedUnion("role", [
+  z.object({
+    role: z.literal("user"),
+    content: z.string().max(MAX_USER_TURN_CHARS),
+  }),
+  z.object({
+    role: z.literal("assistant"),
+    content: z.string().max(MAX_ASSISTANT_TURN_CHARS),
+  }),
+]);
+
 const bodySchema = z.object({
-  messages: z
-    .array(
-      z.object({
-        role: z.enum(["user", "assistant"]),
-        content: z.string(),
-      })
-    )
-    .min(1)
-    .max(40),
+  messages: z.array(turnSchema).min(1).max(40),
 });
 
 function clientIp(req: Request): string {
@@ -36,9 +53,13 @@ function clientIp(req: Request): string {
   return "unknown";
 }
 
-function textResponse(message: string, rejected: boolean): Response {
+function textResponse(
+  message: string,
+  rejected: boolean,
+  status = 200
+): Response {
   return new Response(message, {
-    status: 200,
+    status,
     headers: {
       "content-type": "text/plain; charset=utf-8",
       "x-chat-status": rejected ? "rejected" : "ok",
@@ -57,9 +78,12 @@ export async function POST(req: Request): Promise<Response> {
   try {
     parsed = bodySchema.parse(await req.json());
   } catch {
+    // Malformed or oversized body: a client-side error, so 400 (not 200) —
+    // the ChatBar still renders the text, and scripted callers see the status.
     return textResponse(
       "Sorry — I couldn't read that request. Please try again.",
-      true
+      true,
+      400
     );
   }
 

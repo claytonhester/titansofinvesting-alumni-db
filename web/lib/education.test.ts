@@ -137,4 +137,41 @@ describe("groupEducation", () => {
   it("returns no cards for an empty claim list", () => {
     expect(groupEducation([])).toEqual([]);
   });
+
+  it("keeps a campus name whole: bare 'University of Texas at Austin'", () => {
+    const groups = groupEducation([edu("University of Texas at Austin")]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].institution).toBe("The University of Texas at Austin");
+    expect(groups[0].degrees).toEqual([]);
+  });
+
+  it("keeps a campus name whole behind a degree ('... from University of Texas at Austin')", () => {
+    const groups = groupEducation([
+      edu("BBA in Finance from University of Texas at Austin"),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].institution).toBe("The University of Texas at Austin");
+    expect(groups[0].degrees).toEqual(["BBA in Finance"]);
+  });
+
+  it("groups the campus form with the McCombs / 'The University of Texas' aliases", () => {
+    const groups = groupEducation([
+      edu("BBA in Finance from University of Texas at Austin"),
+      edu("MBA From The University of Texas"),
+      edu("Master of Business Administration From McCombs School of Business"),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].institution).toBe("The University of Texas at Austin");
+    expect(groups[0].degrees).toEqual([
+      "BBA in Finance",
+      "Master of Business Administration",
+    ]);
+  });
+
+  it("still splits 'sub-school at Parent University' on 'at'", () => {
+    const groups = groupEducation([
+      edu("Mays Business School at Texas A&M University"),
+    ]);
+    expect(groups[0].institution).toBe("Texas A&M University");
+  });
 });

@@ -46,7 +46,7 @@ function formatDate(iso: string): string {
 
 function PersonChip({ item }: { item: NewsItem }) {
   return (
-    <Link href={`/person/${item.nameSlug}`} className="news-person">
+    <Link href={item.href} className="news-person">
       <span className="news-person-name">{item.personName}</span>
       <span className="news-person-meta">
         {item.school}

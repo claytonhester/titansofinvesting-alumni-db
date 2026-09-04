@@ -127,7 +127,7 @@ export default function SectorModal({
                   <div className="sector-group-list">
                     {g.members.map((m) => (
                       <Link
-                        href={`/person/${m.slug}`}
+                        href={m.href}
                         className="sector-member"
                         key={`${m.slug}-${m.name}`}
                       >

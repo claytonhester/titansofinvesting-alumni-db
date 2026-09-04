@@ -16,6 +16,7 @@ function item(category: NewsCategory, relevance: number, date = ""): NewsItem {
     sourceHost: "",
     date,
     relevance,
+    href: "/person/s",
   };
 }
 

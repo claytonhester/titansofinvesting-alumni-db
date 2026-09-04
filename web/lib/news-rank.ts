@@ -7,7 +7,7 @@ import type { NewsCategory, NewsItem } from "./news-types";
 // (the old behavior) buried recognition under them. We blend the category weight
 // with the item's own importance so a genuinely MAJOR move or deal still rises,
 // but the default order is recognition-first.
-export const CATEGORY_RANK: Record<NewsCategory, number> = {
+const CATEGORY_RANK: Record<NewsCategory, number> = {
   Recognition: 1.0,
   "Funding & Deals": 0.65,
   "Market Views": 0.45,

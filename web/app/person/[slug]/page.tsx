@@ -13,11 +13,20 @@ export const dynamic = "force-dynamic";
 
 export default async function PersonPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>;
+  // `?c=<titan_class>` disambiguates namesakes that share a slug (emitted by
+  // db.personHref). Absent or malformed → the earliest class, as before.
+  searchParams: Promise<{ c?: string }>;
 }) {
   const { slug } = await params;
-  const person = getPersonBySlug(slug);
+  const { c } = await searchParams;
+  const requestedClass = c ? Number(c) : undefined;
+  const person = getPersonBySlug(
+    slug,
+    Number.isInteger(requestedClass) ? requestedClass : undefined
+  );
   if (!person) notFound();
 
   const claims = getClaimsForPerson(person.id);

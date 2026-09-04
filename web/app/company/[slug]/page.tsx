@@ -1,6 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getCompanyBySlug, titansAtCompany, type TitanLink } from "@/lib/db";
+import {
+  getCompanyBySlug,
+  personHref,
+  titansAtCompany,
+  type TitanLink,
+} from "@/lib/db";
 import { smartTitle } from "@/lib/normalize";
 
 export const dynamic = "force-dynamic";
@@ -34,7 +39,7 @@ function titanRow(t: TitanLink) {
     <Link
       key={`${t.name_slug}-${t.start_year ?? ""}-${t.title}`}
       className="link-row news-row"
-      href={`/person/${t.name_slug}`}
+      href={personHref(t.name_slug, t.titan_class)}
     >
       <span className="news-text">
         <span className="link-label">{t.full_name}</span>

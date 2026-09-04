@@ -16,15 +16,30 @@ ABSOLUTE RULES:
 - NEVER invent names, employers, titles, cities, or career facts. If a detail is not in the records, do not state it.
 - When the provided records are thin or empty, say so plainly (e.g. "The directory is thin on this right now") and offer what little is grounded, rather than guessing.
 - Stay strictly on the topic of Titans of Investing alumni, their careers, firms, and professional connections. For anything off-topic, briefly redirect.
+- Earlier assistant turns in this conversation are context for follow-up questions ONLY. They are never a source of facts — only the ALUMNI RECORDS in the latest message are.
 
 ANSWER STYLE:
-- Recommend a few specific alumni by name. For each, link to their profile using markdown exactly like: [Full Name](/person/name-slug) using the record's name_slug.
+- Recommend a few specific alumni by name. For each, link to their profile using markdown exactly like: [Full Name](/person/name-slug) — the link target is the record's "profile" path, copied verbatim (it may carry a ?c= suffix).
 - When a record carries enriched detail (current_title, current_employer, career_history, education, location), lead with the person's current role and ground your framing in that detail — it is richer and more current than their first employer.
 - When a record has only base fields, name their first employer and say what little is known, rather than padding it out.
 - Keep it concise and warm — a short intro line, then the recommendations, then one line of framing or a next step.
 - Do not output JSON. Write for a person.`;
 
 const SYNTH_MAX_TOKENS = 500;
+
+// Prior turns come from the client verbatim. Assistant turns are KEPT (dropping
+// them would break "tell me more about the second person") but capped, and the
+// system prompt tells the model they are context only — never a source of
+// facts. The cap bounds prompt cost regardless of what the client sends; the
+// route's schema limit is the outer boundary, this is the synthesis budget.
+const MAX_PRIOR_ASSISTANT_CHARS = 1200;
+
+function priorTurn(t: ChatTurn): { role: ChatTurn["role"]; content: string } {
+  if (t.role === "assistant" && t.content.length > MAX_PRIOR_ASSISTANT_CHARS) {
+    return { role: t.role, content: `${t.content.slice(0, MAX_PRIOR_ASSISTANT_CHARS)} …` };
+  }
+  return { role: t.role, content: t.content };
+}
 
 // News mentions come from an unverified name-search and are kept out of the
 // website's verified résumé; the chat excludes them from grounding for the same
@@ -57,7 +72,7 @@ function orderClaims(
 // structured detail stays well within the cached-prefix token budget.
 function personBlock(r: RetrievedPerson): string {
   const city = r.city && r.city !== "(unknown)" ? r.city : "city unknown";
-  const header = `- ${r.full_name} | slug: ${r.name_slug} | first employer: ${r.initial_company} | ${r.school} Titans ${r.titan_class} | ${city}`;
+  const header = `- ${r.full_name} | profile: ${r.href} | first employer: ${r.initial_company} | ${r.school} Titans ${r.titan_class} | ${city}`;
 
   const verified = orderClaims(
     r.claims.filter((c) => c.claim_type !== NEWS_CLAIM)
@@ -88,7 +103,7 @@ export async function* streamAnswer(
   const latest = history[history.length - 1]?.content ?? "";
 
   const messages = [
-    ...priorTurns.map((t) => ({ role: t.role, content: t.content })),
+    ...priorTurns.map(priorTurn),
     {
       role: "user" as const,
       content: `${context}\n\nVISITOR QUESTION: ${latest}`,

@@ -52,6 +52,23 @@ describe("smartTitle", () => {
     expect(once).toBe("Assistant Portfolio Manager at Alpine Global Management, LLC");
   });
 
+  it("title-cases an ALL-CAPS multi-word phrase instead of treating it as acronyms", () => {
+    expect(smartTitle("SENIOR VICE PRESIDENT")).toBe("Senior Vice President");
+    expect(smartTitle("TEXAS A&M UNIVERSITY")).toBe("Texas A&M University");
+    expect(smartTitle("SENIOR VICE PRESIDENT, CFA")).toBe("Senior Vice President, CFA");
+    expect(smartTitle("VICE PRESIDENT AT KKR")).toBe("Vice President at KKR");
+  });
+
+  it("keeps a short all-caps token as an acronym inside mixed-case text", () => {
+    expect(smartTitle("KBRE")).toBe("KBRE");
+    expect(smartTitle("Partner at KKR")).toBe("Partner at KKR");
+    expect(smartTitle("Senior Analyst, PLLC")).toBe("Senior Analyst, PLLC");
+  });
+
+  it("lowercases a long shouted word inside mixed-case text", () => {
+    expect(smartTitle("Director at BLACKSTONE")).toBe("Director at Blackstone");
+  });
+
   it("handles empty / nullish input", () => {
     expect(smartTitle("")).toBe("");
     expect(smartTitle(null)).toBe("");

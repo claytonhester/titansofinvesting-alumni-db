@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { checkAuth, checkOrigin, mintChatToken, verifyChatToken } from "./auth";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  chatAuthConfigured,
+  checkAuth,
+  checkOrigin,
+  mintChatToken,
+  verifyChatToken,
+} from "./auth";
 
 const NOW = 1_750_000_000_000;
 
@@ -92,5 +98,47 @@ describe("checkAuth", () => {
       NOW
     );
     expect(res.ok).toBe(false);
+  });
+});
+
+describe("production without CHAT_TOKEN_SECRET fails closed", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("reports auth as not configured and mints no token", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CHAT_TOKEN_SECRET", "");
+    expect(chatAuthConfigured()).toBe(false);
+    expect(mintChatToken(NOW)).toBe("");
+  });
+
+  it("rejects a token signed with the dev fallback secret", () => {
+    vi.stubEnv("CHAT_TOKEN_SECRET", "");
+    vi.stubEnv("NODE_ENV", "test");
+    const devToken = mintChatToken(NOW);
+    expect(verifyChatToken(devToken, NOW)).toBe(true);
+
+    vi.stubEnv("NODE_ENV", "production");
+    expect(verifyChatToken(devToken, NOW)).toBe(false);
+    const res = checkAuth(
+      reqWith({ host: "titans.example", origin: "https://titans.example", "x-chat-token": devToken }),
+      NOW
+    );
+    expect(res.ok).toBe(false);
+  });
+
+  it("works normally in production once the secret is set", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("CHAT_TOKEN_SECRET", "a-real-secret");
+    expect(chatAuthConfigured()).toBe(true);
+    const token = mintChatToken(NOW);
+    expect(token).not.toBe("");
+    expect(verifyChatToken(token, NOW)).toBe(true);
+  });
+
+  it("keeps the zero-config dev fallback outside production", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("CHAT_TOKEN_SECRET", "");
+    expect(chatAuthConfigured()).toBe(true);
+    expect(verifyChatToken(mintChatToken(NOW), NOW)).toBe(true);
   });
 });

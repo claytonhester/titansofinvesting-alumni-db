@@ -9,6 +9,7 @@ vi.mock("@/lib/db", () => ({
   searchPeople: (...args: unknown[]) => dbSearchPeople(...args),
   claimsForSlugs: (...args: unknown[]) => claimsForSlugs(...args),
   peopleBySlugs: (...args: unknown[]) => peopleBySlugs(...args),
+  personHref: (slug: string) => `/person/${slug}`,
 }));
 
 vi.mock("./semantic", () => ({

@@ -143,10 +143,19 @@ export function logTurn(
 // Redis counter that is correct across instances; otherwise they delegate to the
 // in-process file functions above so local dev and tests need no external store.
 
+// On Vercel (many short-lived instances, ephemeral filesystem) the file-backed
+// cap is meaningless: every instance would count from its own fresh, empty log.
+// So a deploy there without a shared store has NO enforceable limit — and the
+// kill switch must fail CLOSED (over cap) rather than run unenforced. Local dev
+// and a single always-on server keep the file path.
+function sharedStoreRequired(): boolean {
+  return Boolean(process.env.VERCEL);
+}
+
 // Hard kill switch, fail-CLOSED: any error reading the shared counter reads as
 // "over cap" so a broken store can never silently disable the spend limit.
 export async function isOverCapShared(now: Date = new Date()): Promise<boolean> {
-  if (!hasSharedStore()) return isOverCap(now);
+  if (!hasSharedStore()) return sharedStoreRequired() ? true : isOverCap(now);
   try {
     return (await redisMonthCostUsd(currentMonth(now))) >= MONTHLY_CAP_USD;
   } catch {

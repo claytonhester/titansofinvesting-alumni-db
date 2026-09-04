@@ -2,6 +2,7 @@ import {
   searchPeople as dbSearchPeople,
   peopleBySlugs,
   claimsForSlugs,
+  personHref,
   type Person,
   type SlugClaim,
 } from "@/lib/db";
@@ -27,6 +28,8 @@ export interface RetrievedPerson {
   initial_company: string;
   city: string;
   source_url: string;
+  // Profile path the model links to (namesake-safe, see db.personHref).
+  href: string;
   claims: { claim_type: string; value: string; source_url: string }[];
 }
 
@@ -42,6 +45,7 @@ function toRetrieved(r: Person, claims: SlugClaim[]): RetrievedPerson {
     initial_company: r.initial_company,
     city: r.city,
     source_url: r.source_url,
+    href: personHref(r.name_slug, r.titan_class),
     claims: claims.map((c) => ({
       claim_type: c.claim_type,
       value: c.value,

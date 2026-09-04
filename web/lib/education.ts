@@ -47,6 +47,7 @@ const CANONICAL_ALIASES: Record<string, string> = {
   "texas mccombs school of business": "The University of Texas at Austin",
   "red mccombs school of business": "The University of Texas at Austin",
   "the university of texas": "The University of Texas at Austin",
+  "university of texas at austin": "The University of Texas at Austin",
   // Other recurring sub-schools, mapped to their parent university.
   "kellogg school of management": "Northwestern University",
   "the wharton school": "University of Pennsylvania",
@@ -60,13 +61,32 @@ function stripTrailingParen(value: string): string {
   return value.replace(/\s*\([^)]*\)\s*$/, "").trim();
 }
 
+// Separators that join a sub-unit, an honors clause, or a parent school.
+// " at " is deliberately NOT here: it is also part of campus names
+// ("University of Texas at Austin"), so it only splits when the remainder
+// itself names an institution — see splitAtParent.
+const SEPARATORS = /\s+-\s+|\s*\|\s*|,/;
+const AT_JOINER = /\s+at\s+/i;
+
+// "Mays Business School at Texas A&M University" -> both halves (the right side
+// is a school). "University of Texas at Austin" -> atomic: what follows "at" is
+// a campus/city, not an institution, so the name must not be truncated.
+function splitAtParent(segment: string): string[] {
+  const match = AT_JOINER.exec(segment);
+  if (!match) return [segment];
+  const left = segment.slice(0, match.index);
+  const right = segment.slice(match.index + match[0].length);
+  return INSTITUTION_WORD.test(right) ? [left, right] : [segment];
+}
+
 // Pick the institution out of a string that may bundle a sub-unit, an honors
 // clause, or a parent school. Splits on the separators that join those parts
 // and keeps the segment that most looks like a degree-granting institution.
 function extractInstitution(raw: string): string {
   const cleaned = stripTrailingParen(raw);
   const segments = cleaned
-    .split(/\s+-\s+|\s*\|\s*|\s+at\s+|,/i)
+    .split(SEPARATORS)
+    .flatMap(splitAtParent)
     .map((s) => s.trim())
     .filter(Boolean);
   if (segments.length <= 1) return cleaned;

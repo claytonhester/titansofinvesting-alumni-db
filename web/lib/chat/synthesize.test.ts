@@ -36,6 +36,7 @@ function person(over: Partial<RetrievedPerson> = {}): RetrievedPerson {
     initial_company: "Acme Capital",
     city: "Dallas",
     source_url: "https://example.com/jane",
+    href: "/person/jane-doe",
     claims: [],
     ...over,
   };
@@ -69,6 +70,13 @@ describe("streamAnswer", () => {
     expect(userMsg.content).toContain("ALUMNI RECORDS");
     expect(userMsg.content).toContain("jane-doe");
     expect(userMsg.content).toContain("VISITOR QUESTION: Who is in Dallas?");
+  });
+
+  it("hands the model the namesake-safe profile path to link to", async () => {
+    await collect([person({ href: "/person/jane-doe?c=9" })]);
+    const callArg = streamFn.mock.calls.at(-1)![0];
+    const userMsg = callArg.messages[callArg.messages.length - 1];
+    expect(userMsg.content).toContain("profile: /person/jane-doe?c=9");
   });
 
   it("signals an empty directory when no rows match", async () => {
@@ -126,5 +134,33 @@ describe("streamAnswer", () => {
     expect(content.indexOf("current_title")).toBeLessThan(
       content.indexOf("short_bio")
     );
+  });
+});
+
+describe("streamAnswer prior-turn handling", () => {
+  async function callWith(history: { role: "user" | "assistant"; content: string }[]) {
+    streamFn.mockReturnValue(fakeStream(["ok"]));
+    for await (const ev of streamAnswer(history, [person()])) void ev;
+    return streamFn.mock.calls.at(-1)![0];
+  }
+
+  it("caps a client-supplied assistant turn and keeps user turns intact", async () => {
+    const long = "z".repeat(5000);
+    const callArg = await callWith([
+      { role: "user", content: "Who is in Dallas?" },
+      { role: "assistant", content: long },
+      { role: "user", content: "And Houston?" },
+    ]);
+    const [firstUser, priorAssistant] = callArg.messages;
+    expect(firstUser).toEqual({ role: "user", content: "Who is in Dallas?" });
+    expect(priorAssistant.role).toBe("assistant");
+    expect(priorAssistant.content.length).toBeLessThan(long.length);
+    expect(priorAssistant.content.length).toBeLessThanOrEqual(1200 + 2);
+    expect(priorAssistant.content.endsWith("…")).toBe(true);
+  });
+
+  it("tells the model prior assistant turns are context only, not facts", async () => {
+    const callArg = await callWith([{ role: "user", content: "Who is in Dallas?" }]);
+    expect(callArg.system[0].text).toContain("never a source of facts");
   });
 });

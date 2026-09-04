@@ -26,9 +26,10 @@ export interface NewsItem {
   sourceHost: string;
   date: string;
   relevance: number;
+  // Profile link for the person chip (namesake-safe, see db.personHref).
+  href: string;
 }
 
 export interface NewsFeedData {
   items: NewsItem[];
-  isSample: boolean;
 }

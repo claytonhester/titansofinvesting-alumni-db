@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the Redis primitives so these tests exercise the branching logic in
 // cost-guard / guards without any live Upstash connection.
@@ -51,6 +51,31 @@ describe("isOverCapShared (Redis path)", () => {
     const result = await isOverCapShared();
     expect(typeof result).toBe("boolean");
     expect(mockMonth).not.toHaveBeenCalled();
+  });
+});
+
+describe("isOverCapShared on Vercel without a shared store", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("fails CLOSED (over cap) — the file-backed cap is unenforceable there", async () => {
+    vi.stubEnv("VERCEL", "1");
+    mockHas.mockReturnValue(false);
+    expect(await isOverCapShared()).toBe(true);
+    expect(mockMonth).not.toHaveBeenCalled();
+  });
+
+  it("still uses the shared counter when Upstash is configured on Vercel", async () => {
+    vi.stubEnv("VERCEL", "1");
+    mockHas.mockReturnValue(true);
+    mockMonth.mockResolvedValue(0);
+    expect(await isOverCapShared()).toBe(false);
+  });
+
+  it("keeps the local file path off Vercel", async () => {
+    vi.stubEnv("VERCEL", "");
+    mockHas.mockReturnValue(false);
+    // A fresh month with no local log reads as $0 spent (below cap).
+    expect(await isOverCapShared(new Date("2099-01-01T00:00:00Z"))).toBe(false);
   });
 });
 
