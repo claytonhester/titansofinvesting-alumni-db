@@ -37,6 +37,7 @@ from firecrawl import Firecrawl
 from config import DB_PATH, AuthError, optional_key, require_key
 from cost_log import PDL_USD_PER_MATCH, append_entry, build_entry, remaining_credits
 from mention_discovery import discover_mentions
+from merge_claims import carry_forward, load_existing_claims, merge_summary
 from news_enrich import extract_news_mentions
 from discovery import DiscoveryResult, NewsDiscoveryResult, Source, _domain, discover, discover_news
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
@@ -639,6 +640,7 @@ def enrich_person(
     li_budget: LinkedInBudget | None = None,
     fc_budget: FirecrawlBudget | None = None,
     policy: ResearchPolicy = ResearchPolicy.BULK,
+    merge_existing: bool = True,
 ) -> _PersonUsage:
     """Run the full pipeline for one person and persist every stage. Records
     batch_status per phase so a crash mid-batch resumes cleanly. Returns the
@@ -949,6 +951,20 @@ def enrich_person(
     li_credits = li_credits_acc
     n_li = n_li_acc
 
+    # === APPEND-AND-RECONCILE ===
+    # Fold in whatever this person already had. Everything downstream — bio
+    # synthesis, the LLM reconciler, the casing digest, the deterministic
+    # cleanup, and the final replace_claims — then operates on the UNION, so a
+    # re-run whose sources came back thin (a dead key, an exhausted budget, a
+    # 503) can no longer overwrite facts we already paid to learn. Pure and
+    # idempotent; a never-enriched person merges against an empty set.
+    if merge_existing:
+        _prior = load_existing_claims(conn, person.id)
+        if _prior:
+            _merged = carry_forward(_prior, claim_rows)
+            print(f"  {merge_summary(_prior, claim_rows, _merged)}")
+            claim_rows = _merged
+
     # Compose a short_bio from the verified facts when no source handed us a
     # ready-made narrative. Built from the FULL résumé set (baseline + PDL + any deep
     # claims), so a PDL-matched person with zero scraped pages still gets a description.
@@ -1209,6 +1225,7 @@ def run(
     needs_deep: bool = False,
     rerun_enriched: bool = False,
     max_usd: float | None = None,
+    merge_existing: bool = True,
 ) -> int:
     # The deep pass targets base-sweep-flagged people and re-researches them
     # aggressively — force REFRESH so the LinkedIn read fires on the corrected
@@ -1305,6 +1322,7 @@ def run(
                     usage = enrich_person(
                         conn, firecrawl, anthropic, person, http, pdl_key, perplexity_key,
                         li_budget=li_budget, fc_budget=fc_budget, policy=policy,
+                        merge_existing=merge_existing,
                     )
                     # Mark a deep-pass person as deep-searched so the queue drains:
                     # finalize won't re-flag them even if their (genuinely short)
@@ -1467,6 +1485,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Deep pass: target people the base sweep flagged "
                         "(person_insights.needs_deep_search=1). Forces --policy "
                         "refresh and bypasses the done-check")
+    p.add_argument("--replace-claims", dest="replace_claims", action="store_true",
+                   help="Overwrite each person's claims with ONLY what this run "
+                        "found, instead of merging with what they already had. "
+                        "Loses facts when a source is down — use it deliberately, "
+                        "e.g. to purge a bad extraction")
     p.add_argument("--rerun-enriched", dest="rerun_enriched", action="store_true",
                    help="Complete rebuild of everyone already enriched (has a "
                         "person_insights row), bypassing the done-check. Pair with "
@@ -1507,7 +1530,8 @@ def main(argv: list[str] | None = None) -> int:
                titan_class=args.titan_class, school=args.school,
                max_credits=args.max_credits, ids=_parse_ids(args.ids),
                no_pdl=args.no_pdl, policy=policy, needs_deep=args.needs_deep,
-               rerun_enriched=args.rerun_enriched, max_usd=args.max_usd)
+               rerun_enriched=args.rerun_enriched, max_usd=args.max_usd,
+               merge_existing=not args.replace_claims)
 
 
 if __name__ == "__main__":

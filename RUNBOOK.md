@@ -93,6 +93,7 @@ python phase2_enrich.py --ids 770,817 --max-credits 0     # rebuild these ids, n
 | `--max-credits N` | Run-level ceiling on deep Firecrawl credits (not per person) |
 | `--max-usd X` | Run-level USD ceiling across all billed vendors |
 | `--no-pdl` | Hard-disable PDL for this run (save the monthly quota) |
+| `--replace-claims` | Overwrite a person's claims with only what this run found, instead of merging (see below) |
 | `--force-deep` | Deprecated alias for `--policy deep` |
 
 Policies change *which gates apply*; the spend ceilings stay active under every policy.
@@ -167,11 +168,27 @@ python compute_completeness.py && python preflight.py --report     # errored / z
 
 `--rerun-ids` prints WEAK+BROKEN ids (`--include-good` adds GOOD).
 
-**Backup-compare gate (do this by hand before finalizing).** `--ids` / `--rerun-enriched`
-**wipe and rebuild** each target. A `--max-credits 0` rebuild can only re-fetch what
-PDL/Perplexity return *today*; a profile whose richness came from a source that
-can't be re-fetched (an old Firecrawl read, a page since taken down, a spent LinkedIn
-read) can come back thinner. Compare claim counts against the backup before you ship:
+**Re-runs merge by default (append-and-reconcile).** A re-run loads the person's
+stored claims and folds them into the fresh set *before* the reconciler runs, so the
+LLM merge, the casing digest, the cleanup and the final write all see the union.
+A `--max-credits 0` rebuild can only re-fetch what PDL/Perplexity return *today*, and
+richness that came from a source you can't re-fetch (an old Firecrawl read, a page
+since taken down, a spent LinkedIn read) used to be destroyed by the rebuild. Now it
+survives. The rules (`merge_claims.py`):
+
+- `current_employer` / `current_title` / `location` / `linkedin_url` — **fresh wins**;
+  a stale employer must not outlive the job. If this run found none, the stored one stays.
+- `career_history` / `education` / `skill` / `public_links` / `news_mention` — **union**,
+  deduplicated (news and links by URL, so re-finding an article does not duplicate it).
+- A synthesized `short_bio` is **dropped and rewritten** from the merged facts; a bio a
+  real source published is kept as evidence.
+
+Pass `--replace-claims` to get the old wipe-and-rebuild — the right tool when you are
+deliberately purging a bad extraction, and the wrong one everywhere else.
+
+**Backup-compare gate (still worth doing before finalizing).** The merge protects
+claims; it does not protect against a bad *new* claim crowding out a good one in
+reconciliation. Compare claim counts against the backup before you ship:
 
 ```bash
 sqlite3 data/titans.db "ATTACH 'data/titans.backup.<date>-prererun.db' AS b;
