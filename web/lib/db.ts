@@ -1,21 +1,37 @@
-import type DatabaseNs from "better-sqlite3";
-import { createRequire } from "node:module";
+import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 
-// better-sqlite3 is a NATIVE addon, and it is loaded on FIRST QUERY rather than
-// at module load. A top-level import pulls the .node binary in while the
-// serverless instance is still booting, and on Vercel that reliably aborted the
-// process on cold starts:
+// SQLite comes from node:sqlite — the engine built into Node — NOT from a
+// native addon. This is deliberate and load-bearing.
+//
+// The app previously used better-sqlite3. It worked locally and on every warm
+// request, but on Vercel (Fluid Compute: many invocations sharing one process)
+// the addon aborted the whole process during environment teardown:
 //
 //   node[4]: void node::RemoveEnvironmentCleanupHook(...) at hooks.cc:142
-//   Node.js process exited with signal: 6 (SIGABRT)
+//   Node.js process exited with signal: 6 (SIGABRT) (core dumped)
 //
-// Every warm request succeeded; every burst that forced new instances produced
-// a batch of 500s. Requiring the addon lazily, inside the request, keeps it out
-// of the boot path. Keep it lazy.
-const requireCjs = createRequire(import.meta.url);
-type DatabaseInstance = DatabaseNs.Database;
+// Any request that opened the DB on a fresh instance could die, so bursts of
+// traffic returned a batch of 500s on every DB-backed route while warm traffic
+// looked perfect. Neither a newer addon version, a lazy require, nor pinning
+// Next helped — the addon itself is the problem in that runtime. node:sqlite is
+// part of Node, so there is no addon to load and nothing to tear down.
+//
+// Do not reintroduce a native SQLite addon into the request path.
+// node:sqlite types rows as Record<string, SQLOutputValue>, so every call site
+// would need a double cast. Narrow once, here: statements hand back `unknown`,
+// which each query then casts to its own row interface exactly as before.
+interface LooseStatement {
+  all(...params: unknown[]): unknown[];
+  get(...params: unknown[]): unknown;
+  run(...params: unknown[]): unknown;
+}
+interface DatabaseInstance {
+  prepare(sql: string): LooseStatement;
+  exec(sql: string): void;
+  close(): void;
+}
 
 // The pipeline owns all writes. The web app opens the SAME SQLite file
 // strictly READ-ONLY — it must never mutate the research database.
@@ -64,10 +80,32 @@ let _db: DatabaseInstance | null = null;
 
 function db(): DatabaseInstance {
   if (_db) return _db;
-  const Database = requireCjs("better-sqlite3") as typeof DatabaseNs;
-  _db = new Database(resolveDbPath(), { readonly: true, fileMustExist: true });
-  _db.pragma("query_only = true");
-  _db.pragma("busy_timeout = 5000");
+  // readOnly throws if the file is missing, which is what we want: a silent
+  // empty DB would render an empty site instead of failing loudly.
+  const conn = new DatabaseSync(resolveDbPath(), { readOnly: true });
+  conn.exec("PRAGMA query_only = true");
+  conn.exec("PRAGMA busy_timeout = 5000");
+  // node:sqlite hands back rows with a NULL prototype. React refuses to send
+  // those from a Server Component to a Client Component ("Only plain objects
+  // ... can be passed"), which fails the render, so every row is copied into a
+  // plain object here — once, rather than at each of the queries below.
+  const toPlain = (row: unknown) =>
+    row === undefined || row === null
+      ? row
+      : { ...(row as Record<string, unknown>) };
+  _db = {
+    prepare(sql: string): LooseStatement {
+      const st = conn.prepare(sql);
+      return {
+        all: (...params) =>
+          st.all(...(params as never[])).map(toPlain) as unknown[],
+        get: (...params) => toPlain(st.get(...(params as never[]))),
+        run: (...params) => st.run(...(params as never[])),
+      };
+    },
+    exec: (sql: string) => conn.exec(sql),
+    close: () => conn.close(),
+  };
   return _db;
 }
 

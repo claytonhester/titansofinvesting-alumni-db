@@ -9,7 +9,7 @@
 // Vectors are stored as Float32 BLOBs in person_vectors(person_id, dim, vec, model).
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import { pipeline } from "@xenova/transformers";
 
 const MODEL = "Xenova/all-MiniLM-L6-v2";
@@ -52,8 +52,8 @@ function loadPeople(db) {
 }
 
 async function main() {
-  const db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
+  const db = new DatabaseSync(dbPath);
+  db.exec("PRAGMA journal_mode = WAL");
   db.exec(
     `CREATE TABLE IF NOT EXISTS person_vectors (
        person_id INTEGER PRIMARY KEY,
@@ -82,9 +82,17 @@ async function main() {
     const slice = texts.slice(i, i + BATCH);
     const out = await extractor(slice, { pooling: "mean", normalize: true });
     const dim = out.dims[1];
-    const writeBatch = db.transaction((rows) => {
-      for (const r of rows) upsert.run(r);
-    });
+    // node:sqlite has no transaction() helper — drive BEGIN/COMMIT directly.
+    const writeBatch = (rows) => {
+      db.exec("BEGIN");
+      try {
+        for (const r of rows) upsert.run(r);
+        db.exec("COMMIT");
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
+    };
     const rows = slice.map((_, j) => {
       const vec = out.data.slice(j * dim, (j + 1) * dim);
       return {

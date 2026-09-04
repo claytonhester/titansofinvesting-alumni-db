@@ -18,7 +18,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.join(here, "..");
@@ -51,9 +51,9 @@ function requireHttps(url) {
 }
 
 function journalMode(dbPath) {
-  const conn = new Database(dbPath, { readonly: true });
+  const conn = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    return conn.pragma("journal_mode", { simple: true });
+    return conn.prepare("PRAGMA journal_mode").get().journal_mode;
   } finally {
     conn.close();
   }
@@ -83,10 +83,10 @@ function convertToRollbackJournal(dbPath) {
     const sidecar = dbPath + ext;
     if (fs.existsSync(sidecar)) fs.rmSync(sidecar);
   }
-  const conn = new Database(dbPath);
+  const conn = new DatabaseSync(dbPath);
   try {
-    conn.pragma("busy_timeout = 5000");
-    conn.pragma("journal_mode = DELETE");
+    conn.exec("PRAGMA busy_timeout = 5000");
+    conn.exec("PRAGMA journal_mode = DELETE");
   } finally {
     conn.close();
   }

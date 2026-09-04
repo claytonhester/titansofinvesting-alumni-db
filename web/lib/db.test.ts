@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
 
 // db.ts opens its file once per process from TITANS_DB_PATH, so the fixture is
@@ -24,11 +24,11 @@ interface SeedRow {
 }
 
 const seed = (() => {
-  const w = new Database(scratch);
+  const w = new DatabaseSync(scratch);
   try {
     const first = w
       .prepare("SELECT id, full_name, name_slug, titan_class, school FROM people ORDER BY id LIMIT 1")
-      .get() as SeedRow;
+      .get() as unknown as SeedRow;
     const namesakeClass = first.titan_class + 7;
     w.prepare(
       `INSERT INTO people (full_name, name_slug, titan_class, school, initial_company, city, source_url, needs_review, raw_entry)
@@ -36,9 +36,9 @@ const seed = (() => {
     ).run(first.full_name, first.name_slug, namesakeClass, first.school);
     const other = w
       .prepare("SELECT id, full_name, name_slug, titan_class, school FROM people WHERE name_slug <> ? ORDER BY id LIMIT 1")
-      .get(first.name_slug) as SeedRow;
+      .get(first.name_slug) as unknown as SeedRow;
     const distinctSources = (
-      w.prepare("SELECT COUNT(DISTINCT source_url) AS n FROM claims WHERE source_url <> ''").get() as { n: number }
+      w.prepare("SELECT COUNT(DISTINCT source_url) AS n FROM claims WHERE source_url <> ''").get() as unknown as { n: number }
     ).n;
     return { first, namesakeClass, other, distinctSources };
   } finally {
@@ -110,7 +110,7 @@ describe("directoryStats on a display DB", () => {
   });
 
   it("counts the review queue once identity_candidates has rows", () => {
-    const w = new Database(scratch);
+    const w = new DatabaseSync(scratch);
     try {
       const insert = w.prepare(
         `INSERT INTO identity_candidates (person_id, source_url, confidence, decision, model)

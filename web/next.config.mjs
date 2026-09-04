@@ -33,9 +33,9 @@ const nextConfig = {
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
-  // Native / heavy modules kept external to the server bundle: better-sqlite3
+  // Heavy module kept external to the server bundle: @xenova/transformers
   // (native addon) and the in-process embedding model (onnxruntime backend).
-  serverExternalPackages: ["better-sqlite3", "@xenova/transformers"],
+  serverExternalPackages: ["@xenova/transformers"],
   // Pin the workspace root so Turbopack ignores lockfiles further up the tree.
   turbopack: { root: import.meta.dirname },
   // Every server route reads the SQLite snapshot via an fs path at runtime,
