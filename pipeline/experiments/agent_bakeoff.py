@@ -19,8 +19,8 @@ Both paths run on the SAME sample people so the comparison is apples-to-apples:
 Costs in Path A are real too: the Haiku call's token usage is captured from the
 live API response, not guessed.
 
-    python agent_bakeoff.py --limit 3
-    python agent_bakeoff.py --limit 3 --model openai/gpt-5-mini --tools people_search,web_search
+    python -m experiments.agent_bakeoff --limit 3
+    python -m experiments.agent_bakeoff --limit 3 --model openai/gpt-5-mini --tools people_search,web_search
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from cost_log import HAIKU_USD_PER_MTOK_IN, HAIKU_USD_PER_MTOK_OUT
 from db import connect
 from news_score import is_aggregator_domain, normalize_domain
 from news_verify import _SYSTEM, _build_user, _parse_verdicts, Candidate
-from perplexity_agent import run_agent
+from experiments.perplexity_agent import run_agent
 from perplexity_enrich import fetch_perplexity
 from structuring import HAIKU_MODEL
 

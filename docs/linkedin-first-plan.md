@@ -1,5 +1,19 @@
 # LinkedIn-First Enrichment — Plan of Record
 
+> ## Status (2026-09-03)
+>
+> **Phase 0 shipped** (fail-closed `linkedin_verify.py`, `linkedin_refresh.py`,
+> `--policy bulk|deep|refresh`, dated-wins reconcile rule, completeness score in
+> `finalize_pass.sh`). **The 12-person pilot (June 11) reversed the premise:** PDL is
+> the résumé spine (7/12 matched, ~78% of claims), and the LinkedIn agent read is
+> flaky and expensive (~45–324 credits, ~42% land rate) — it is now a **gap-filler**
+> fired only when the completeness gate flags a profile (`deep_search_flag.py`: no
+> current role OR <3 career roles) or under `--policy refresh`. The **two-pass design**
+> (Firecrawl-free base sweep → `--needs-deep` pass, `deep_search_done` sticky marker)
+> superseded Phases 1–3 as written below. The 84-person triage rerun + deep passes ran
+> **June 11–12**: cohort scorecard **D/66 → B/84**, deep-search queue drained.
+> The rest of this document is kept as the historical plan of record.
+
 *Decided 2026-06-11. Supersedes the "LinkedIn as deep-path add-on" posture.
 Context: Firecrawl plan upgraded to 100k credits/month; the Grant Larkin case
 (stale titles/dates invisible until compared against LinkedIn) proved the

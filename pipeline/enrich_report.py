@@ -18,7 +18,6 @@ Run it on a representative sample (e.g. --limit 25) before committing the full r
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -26,7 +25,7 @@ from urllib.parse import urlparse
 import httpx
 from anthropic import Anthropic
 
-from config import DB_PATH, require_key
+from config import DB_PATH, optional_key, require_key
 from cost_log import PDL_USD_PER_MATCH
 from db import connect, init_schema
 from directory_hosts import DIRECTORY_HOSTS, PUBLIC_RECORDS_HOSTS, SOCIAL_HOSTS, registrable_host
@@ -219,8 +218,8 @@ def _render(report: PersonReport) -> str:
 
 def run(limit: int, name: str | None, titan_class: int | None, school: str | None) -> int:
     anthropic = Anthropic(api_key=require_key("ANTHROPIC_API_KEY"))
-    pdl_key = os.getenv("PDL_API_KEY")
-    perplexity_key = os.getenv("PERPLEXITY_API_KEY")
+    pdl_key = optional_key("PDL_API_KEY")
+    perplexity_key = optional_key("PERPLEXITY_API_KEY")
     with connect(DB_PATH) as conn:
         init_schema(conn)
         init_enrichment_schema(conn)

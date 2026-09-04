@@ -7,8 +7,10 @@ whole web, not just news, which for thin-data alumni is a plus: a bio page, a
 leadership listing, or an interview is often more useful than a news wire.
 
 Billed per request (cheap, ~$5 / 1,000 searches at time of writing), so the
-caller is expected to meter volume. Never raises: an outage, an auth error, or
-malformed JSON yields an empty list so a bulk loop keeps going.
+caller is expected to meter volume. Never raises for an outage or malformed
+JSON (empty list, so a bulk loop keeps going) — but a rejected key (401/403) is
+config.AuthError, because a bad key silently emptying every search is worse
+than a stopped run.
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from config import AuthError
 from news_score import has_meaningful_employer
 
 PERPLEXITY_SEARCH_URL = "https://api.perplexity.ai/search"
@@ -77,7 +80,7 @@ def fetch_perplexity(
 ) -> list[PerplexityResult]:
     """Run one Perplexity search for a person and return normalized results.
     Retries transient (429/5xx/network) errors with backoff; gives up to an empty
-    list. Never raises."""
+    list. Never raises — except AuthError on a rejected key (401/403)."""
     query = build_query(name, employer)
     if not query or not api_key:
         return []
@@ -106,5 +109,7 @@ def fetch_perplexity(
                 return []
             time.sleep(backoff_base ** attempt)
             continue
-        return []  # 401/403/4xx: retrying won't help
+        if resp.status_code in (401, 403):
+            raise AuthError(f"Perplexity rejected the API key (HTTP {resp.status_code})")
+        return []  # other 4xx: retrying won't help
     return []

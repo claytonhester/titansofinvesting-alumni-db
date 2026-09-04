@@ -33,6 +33,7 @@ from anthropic import Anthropic
 from config import DB_PATH, require_key
 from cost_log import append_entry, build_entry
 from db import connect, init_schema
+from migrations import migrate
 from insights_llm import canonicalize_titles, write_narrative
 from insights_rollup import (
     DEFAULT_TOP_TITLES,
@@ -116,6 +117,7 @@ def run(year: int | None, use_llm: bool) -> int:
         init_schema(conn)
         init_insights_schema(conn)
         init_person_insights_schema(conn)
+        migrate(conn)
 
         snap = build_snapshot(conn, snapshot_year)
         if snap.people_total == 0:

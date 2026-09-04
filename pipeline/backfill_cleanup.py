@@ -21,7 +21,8 @@ from the cleaned career history, then phase3_insights to rebuild the snapshot.
 from __future__ import annotations
 
 import argparse
-import os
+
+from config import optional_key
 import sqlite3
 
 import httpx
@@ -60,10 +61,10 @@ def backfill(db_path: str, use_llm: bool, use_sonar: bool = False) -> None:
     load_dotenv()
     client = None
     if use_llm:
-        key = os.getenv("ANTHROPIC_API_KEY")
+        key = optional_key("ANTHROPIC_API_KEY")
         client = Anthropic(api_key=key) if key else None
 
-    perplexity_key = os.getenv("PERPLEXITY_API_KEY") if use_sonar else None
+    perplexity_key = optional_key("PERPLEXITY_API_KEY") if use_sonar else None
     if use_sonar and not perplexity_key:
         print("  --sonar requested but PERPLEXITY_API_KEY not set — skipping Sonar")
 
@@ -73,7 +74,7 @@ def backfill(db_path: str, use_llm: bool, use_sonar: bool = False) -> None:
     # Firecrawl cost is bounded to the (tiny) feed size.
     fetch_article = None
     if use_llm:
-        fc_key = os.getenv("FIRECRAWL_API_KEY")
+        fc_key = optional_key("FIRECRAWL_API_KEY")
         if fc_key:
             from firecrawl import Firecrawl
 

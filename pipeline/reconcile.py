@@ -30,15 +30,19 @@ Cost: one Haiku call per person (~$0.004). Mentions/links pass straight through.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, replace
 
-from anthropic import Anthropic
+from anthropic import Anthropic, AuthenticationError, PermissionDeniedError
 
 from career_analysis import parse_career_entry
+from config import AuthError
 from enrichment_store import ClaimRow
 from normalize import smart_title
 from structuring import HAIKU_MODEL
+
+_log = logging.getLogger(__name__)
 
 RECONCILE_METHOD_SUFFIX = "+reconciled"
 
@@ -474,7 +478,11 @@ def reconcile_claims(
         text = "".join(b.text for b in response.content if b.type == "text")
         tok_in = response.usage.input_tokens
         tok_out = response.usage.output_tokens
-    except Exception:
+    except (AuthenticationError, PermissionDeniedError) as exc:
+        raise AuthError(f"Anthropic rejected the API key ({exc.__class__.__name__})") from exc
+    except Exception as exc:  # noqa: BLE001 — unreconciled claims still digest fine
+        _log.warning("reconcile: Claude call failed for %s, claims left unmerged: %s",
+                     full_name, exc)
         return claims, 0, 0
 
     decisions = _parse_decisions(text, len(resume))

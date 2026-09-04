@@ -1,6 +1,6 @@
 """Perplexity Sonar press-discovery source for Phase 2.
 
-The bake-off (sonar_probe.py, see [[project_titans_stack_decisions_jun9]]) found
+The bake-off (experiments/sonar_probe.py, see [[project_titans_stack_decisions_jun9]]) found
 Sonar-pro is a poor *résumé* source (non-deterministic on findable people) but a
 strong *focused-press* source: cited, person-specific recognition (Forty Under
 Forty, promotions, podcasts, interviews) at ~$0.008/person — and crucially OFF the
@@ -27,10 +27,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+import logging
+
 import httpx
 
+from config import AuthError
 from enrichment_store import ClaimRow
 from news_score import has_meaningful_employer, is_aggregator_domain
+
+_log = logging.getLogger(__name__)
 
 SONAR_URL = "https://api.perplexity.ai/chat/completions"
 DEFAULT_MODEL = "sonar-pro"
@@ -166,13 +171,15 @@ def _loads_lenient(blob: str) -> dict | None:
             blob = blob[:-3]
     try:
         return json.loads(blob)
-    except Exception:
+    except Exception:  # noqa: BLE001 — fall through to the braces salvage
         s, e = blob.find("{"), blob.rfind("}")
         if 0 <= s < e:
             try:
                 return json.loads(blob[s : e + 1])
-            except Exception:
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("sonar: unparseable JSON reply (%s): %.80r", exc, blob)
                 return None
+    _log.warning("sonar: reply carried no JSON object: %.80r", blob)
     return None
 
 
@@ -234,9 +241,18 @@ def _one_facet(
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     try:
         resp = http.post(SONAR_URL, json=payload, headers=headers, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001 — degrade this facet, keep the run
+        _log.warning("sonar: request failed for %s (%s): %s", name, ask[:40], exc)
+        return [], 0.0
+    if resp.status_code in (401, 403):
+        # Same Perplexity key as /search — a rejected key must stop the run, not
+        # quietly return "no press" for everyone.
+        raise AuthError(f"Perplexity Sonar rejected the API key (HTTP {resp.status_code})")
+    try:
         resp.raise_for_status()
         body = resp.json()
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("sonar: bad response for %s (%s): %s", name, ask[:40], exc)
         return [], 0.0
     cost = _cost(body.get("usage") or {})
     content = (body.get("choices") or [{}])[0].get("message", {}).get("content", "")
@@ -272,7 +288,8 @@ def discover_press_sonar(
     de-duped by URL. Queries adapt to the person's actual role/industry (no hardcoded
     field). Each item still passes the is_about gate + aggregator drop here, then the
     article-verified curator downstream. Empty (no request/cost) when key or name is
-    missing; degrades to empty — never raises — on any API/parse failure."""
+    missing; degrades to empty — never raises — on any API/parse failure, with the
+    one deliberate exception of a rejected key (config.AuthError)."""
     if not perplexity_key or not full_name.strip():
         return _EMPTY
 

@@ -1,5 +1,21 @@
 # Titans of Investing — Enrichment & Search v2 Plan
 
+> ## Status (2026-09-03)
+>
+> - **Phase 0 (search layer) — DONE**, see below and `docs/phase0-proof.md`.
+> - **Phase 1 (coverage run over the ~946 never-enriched alumni) — NOT STARTED.**
+>   Blocked on the budget decision and on PDL quota (free tier exhausted; the API
+>   returns 402 regardless of the dashboard count).
+> - **A1 deep gate — done** (`deep_gate.is_high_signal` + `--max-credits` run-level
+>   ceiling; later folded into the two-pass flow with `deep_search_flag.py`).
+> - **A2 PDL anchors — partial**: school + location are passed; grad-year and
+>   middle-name anchors are not.
+> - **A3 Jina baseline — built** (`http_fetch.py`, `jina_discovery.py`), but its
+>   0-source behaviour under sustained batch load (see `docs/reenrich-backlog.md`)
+>   was never diagnosed. PDL-matched people are unaffected.
+> - Commit references below were rewritten when the history was scrubbed; the
+>   current equivalents are `9ae06b7` (facets) and `18bdbe6` (semantic search).
+
 **Goal:** enrich the remaining ~1,008 alumni *and* make search materially stronger
 (semantic + faceted retrieval, higher-fidelity data), within a **~$500** budget.
 
@@ -100,9 +116,9 @@ live as `claim_type='skill'`. None of it is searchable yet.
 **Phase 0 — build the search layer first, on the existing 48 — ✅ DONE (cost: ~$0).**
 Shipped B + C against the *current* data, proving the stronger search before any
 coverage spend:
-- Faceted search on `current_sector` + `pdl_seniority` (commit b402693).
+- Faceted search on `current_sector` + `pdl_seniority` (commit 9ae06b7).
 - Local semantic search — in-process all-MiniLM-L6-v2 embeddings, hybrid merge,
-  `npm run embed` to (re)build vectors (commit 4fc9f42). Verified live: "who moved
+  `npm run embed` to (re)build vectors (commit 18bdbe6). Verified live: "who moved
   from engineering into finance?" surfaces the engineer-turned-investors that no
   keyword/facet filter could find. `npm audit` clean; production build verified.
 - **Re-embed flow:** vectors live in the pipeline DB (`person_vectors`) so they ride

@@ -13,6 +13,7 @@ Public data only; no auth, no logins.
 """
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -25,6 +26,8 @@ from firecrawl.v2.utils.error_handler import (
     UnauthorizedError,
     WebsiteNotSupportedError,
 )
+
+_log = logging.getLogger(__name__)
 
 # Run-level fatals: a broken run that will never succeed on retry (no credits,
 # bad key, malformed request). Let them abort loudly instead of masquerading as
@@ -270,9 +273,6 @@ def discover_news(
         fallback_company=company,
     )
 
-    import logging
-    _log = logging.getLogger(__name__)
-
     # PaymentRequiredError fires on SEARCH (no credits) as well as SCRAPE.
     # _search_with_retry re-raises it as a run-level fatal for the career pass,
     # but discover_news() is optional — no credits means empty result, not crash.
@@ -306,7 +306,8 @@ def discover_news(
             break
         except _SCRAPE_RERAISE:
             continue
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — skip this page, keep the pass
+            _log.warning("discover_news: scrape failed for %s: %s", cand.url, exc)
             continue
         credits_spent += 1
         if not markdown.strip():
@@ -400,8 +401,9 @@ def _search_with_retry(
             return list(data.web or [])
         except _FATAL_FIRECRAWL_ERRORS:
             raise
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — transient: retry, then give up loudly
             if attempt == attempts - 1:
+                _log.warning("search gave up after %d attempts for %r: %s", attempts, query, exc)
                 return []
             time.sleep(backoff_base ** attempt)
     return []
@@ -425,8 +427,9 @@ def _scrape_with_retry(
             # the discover() scrape loop to skip just this URL. Both re-raise now
             # rather than burning retries on a deterministic failure.
             raise
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — transient: retry, then skip loudly
             if attempt == attempts - 1:
+                _log.warning("scrape gave up after %d attempts for %s: %s", attempts, url, exc)
                 return ""
             time.sleep(backoff_base ** attempt)
     return ""

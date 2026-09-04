@@ -1,10 +1,18 @@
 # Phase 0 — Proof (search upgrades, built for $0)
 
+> ## Status (2026-09-03)
+>
+> **History.** Phase 0 shipped as described; both features are live. The commits
+> cited below were rewritten when the repo history was scrubbed before going
+> public — current equivalents: faceted search **`9ae06b7`**, semantic search
+> **`18bdbe6`**. The web unit-test count is now **148** (was 136 at the time).
+> Names in the transcripts are synthetic.
+
 The two search upgrades from the v2 plan are **built, shipped, and verified** against
 the existing 48 enriched alumni — before any coverage spend. This is the evidence.
 
-- **Faceted search** — filter on the enriched `current_sector` + seniority (commit `b402693`)
-- **Semantic search** — local in-process embeddings, hybrid retrieval (commit `4fc9f42`)
+- **Faceted search** — filter on the enriched `current_sector` + seniority (commit `9ae06b7`)
+- **Semantic search** — local in-process embeddings, hybrid retrieval (commit `18bdbe6`)
 - Cost: **$0** · Tests: **136 green** · Production build: **compiles** · `npm audit`: **clean**
 
 ---

@@ -1,6 +1,6 @@
 """Verified public-mention discovery for Phase 2.
 
-The production pass distilled from the news A/B experiment (news_experiment.py):
+The production pass distilled from the news A/B experiment (experiments/news_experiment.py):
 
     Perplexity Search (name + employer)
         -> drop people-search / data-broker domains  (news_score)

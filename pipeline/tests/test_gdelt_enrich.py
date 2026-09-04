@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from gdelt_enrich import GdeltArticle, _employer_is_meaningful, _parse_articles, build_query
+from experiments.gdelt_enrich import GdeltArticle, _employer_is_meaningful, _parse_articles, build_query
 
 
 class TestBuildQuery:

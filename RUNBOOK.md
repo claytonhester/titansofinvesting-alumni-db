@@ -1,327 +1,297 @@
 # Titans of Investing — Pipeline Runbook
 
-Everything you need to collect, enrich, and serve the alumni dataset.
+Operator's guide: collect, enrich, finalize, and ship the alumni dataset.
+Every command runs from `pipeline/` with the venv active unless noted.
+*Last verified against the code: 2026-09-03.*
 
 ---
 
 ## Overview
 
-The project has two halves:
-
-| Half | What it does | Where it lives |
+| Half | What it does | Where |
 |---|---|---|
-| **Pipeline** | Collects and enriches alumni data into a SQLite DB | `pipeline/` |
-| **Web app** | Serves a chat interface and alumni directory | `web/` |
+| **Pipeline** | Collects + enriches alumni into `pipeline/data/titans.db` | `pipeline/` |
+| **Web app** | Serves directory, insights, chat from a read-only SQLite snapshot | `web/` |
 
-The pipeline runs once (or periodically). The web app reads the DB the pipeline produces.
+The public repo ships only the synthetic `web/data/sample.db`. The real DB never
+enters git; production downloads a display-only copy from a private Vercel Blob at
+build time (see [Shipping data](#shipping-data-to-the-site)).
 
 ---
 
 ## Prerequisites
 
-### 1. Environment keys
-
-Copy `.env.example` to `.env` at the repo root and fill in:
+### 1. Keys — `.env` at the repo root
 
 ```bash
-cp .env.example .env
+cp .env.example .env     # fill in; config.py loads REPO_ROOT/.env
 ```
 
-| Key | Required | What it does | Where to get it |
-|---|---|---|---|
-| `FIRECRAWL_API_KEY` | **Yes** | Web scraping + search per person | [firecrawl.dev](https://firecrawl.dev) |
-| `ANTHROPIC_API_KEY` | **Yes** | Claude extraction + identity resolution | [console.anthropic.com](https://console.anthropic.com) |
-| `PDL_API_KEY` | Optional | Structured career data (charged ~$0.28/match) | [peopledatalabs.com](https://peopledatalabs.com) |
-| `GNEWS_API_KEY` | Optional | News mentions (flat monthly subscription) | [gnews.io](https://gnews.io) |
-| `PERPLEXITY_API_KEY` | Optional | Identity-verified public mentions/profiles (~$0.005/person + a small Haiku call) | [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api) |
+| Key | Required? | Role in a run |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | **Yes** | Haiku structuring/verification/reconcile; Sonnet identity gate |
+| `FIRECRAWL_API_KEY` | **Yes — key only** | Needed to *construct* the client. **Zero credits is fine**: the baseline path is Firecrawl-free. Credits are spent only on the deep path (see below) |
+| `PDL_API_KEY` | Soft | People Data Labs match — the résumé "spine" (~$0.28/match, misses free). Unset → PDL step skipped |
+| `PERPLEXITY_API_KEY` | Soft | `/search` mention discovery + Sonar press discovery (both Haiku-verified). Unset → those passes skip |
+| `GNEWS_API_KEY` | Legacy | Read only by the frozen `experiments/news_experiment.py`. Not used by enrichment |
 
-PDL and GNews have free tiers (100 records/month and 100 requests/day). If keys are absent the pipeline skips those sources gracefully — it still works, just with less data.
+`preflight.py` prints exactly this table with ✓/✗ for the current shell.
 
-The web app also needs `ANTHROPIC_API_KEY` in `web/.env.local`:
-```bash
-echo "ANTHROPIC_API_KEY=your_key_here" >> web/.env.local
-```
-
-### 2. Python environment
+### 2. Python + Node
 
 ```bash
-cd pipeline
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+cd pipeline && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+cd ../web && npm install                     # finalize_pass.sh calls `npm run embed` / `sync-db`
 ```
 
-### 3. Firecrawl credits
+### 3. Firecrawl credits — what they actually buy
 
-Check your balance before running:
 ```bash
 python -c "from firecrawl import Firecrawl; from config import require_key; from cost_log import remaining_credits; print(remaining_credits(Firecrawl(api_key=require_key('FIRECRAWL_API_KEY'))), 'credits')"
 ```
 
-**Credit budget:**
-- ~5 credits/person for the career pass (main discovery, capped at 5 scrapes)
-- ~5 credits/person for the news pass (press articles, capped at 5 scrapes)
-- ~10 credits/person total maximum
-- 100-person test run: ~1,000 credits
-- Full ~1,200-person run: ~12,000 credits
+- **Baseline (free):** PDL + Perplexity `/search` + Jina fetch + Sonar press. 0 credits.
+- **Deep path (billed):** richer career scrape + Firecrawl news + the LinkedIn agent
+  read (**~45–324 credits per read**, ~126–200 typical). It fires only when the
+  signal gate says so (`deep_gate.is_high_signal`: PDL match, or ≥2 verified sources
+  + a current employer) or a policy forces it, and always under `--max-credits`.
+- `--max-credits N` is a **run-level ceiling** on deep-path credits (default = live
+  balance). `--max-credits 0` = a guaranteed Firecrawl-free run.
 
 ---
 
-## Running the pipeline
-
-### Phase 1 — Ingest the alumni directory
-
-Scrapes the Titans of Investing directory and populates the `people` table. Free — no API calls.
+## Phase 1 — Ingest the directory (free)
 
 ```bash
-python cli.py ingest
+python cli.py ingest                    # scrape the public class directory -> people
+python cli.py ingest --html snap.html   # re-parse a saved snapshot
 ```
-
-Run once. Re-running is safe (idempotent).
-
-**Result:** `pipeline/data/titans.db` populated with ~1,056 people.
+Idempotent. Result: `people` table (1,056 rows as of June 2026).
 
 ---
 
-### Start fresh (wipe collected data and re-ingest clean)
-
-Two ways to reset, depending on how much you want to keep:
+## Phase 2 — Enrich (`phase2_enrich.py`)
 
 ```bash
-# A. Nuke EVERYTHING and rebuild from the directory (people + all enrichment).
-rm pipeline/data/titans.db
-python cli.py ingest                    # rebuilds the people table, clean by construction
-python phase2_enrich.py --limit 50      # collect a fresh batch
-
-# B. Keep the people list, wipe ONLY the enrichment (claims/status/sources).
-sqlite3 pipeline/data/titans.db "DELETE FROM claims; DELETE FROM batch_status; DELETE FROM identity_candidates; DELETE FROM person_sources;"
-python phase2_enrich.py --limit 50
+python phase2_enrich.py --limit 5                         # next 5 un-enriched
+python phase2_enrich.py --name "Jonah Kessler"            # one person
+python phase2_enrich.py --class 2 --school "Texas A&M" --limit 25
+python phase2_enrich.py --ids 770,817 --max-credits 0     # rebuild these ids, no Firecrawl
 ```
 
-Then `cd web && npm run sync-db` to push the new data to the site.
+### Flags
 
-> You do **not** need `clean_data.py` or `renormalize_claims.py` for a fresh
-> ingest — those are one-time/legacy backfill tools. Cleaning is built into the
-> ingest itself (see next note).
+| Flag | Meaning |
+|---|---|
+| `--limit N` | How many un-enriched people (default 5) |
+| `--name "Full Name"` | One person by name |
+| `--class N` / `--school S` | Target an un-enriched cohort |
+| `--ids a,b,c` | Rebuild exactly these ids **in place** (bypasses the done-check) |
+| `--rerun-enriched` | Rebuild everyone with a `person_insights` row (pair with `--max-credits 0`) |
+| `--needs-deep` | Deep pass: only `person_insights.needs_deep_search=1`; forces `--policy refresh` |
+| `--policy bulk\|deep\|refresh` | Gate criteria (`research_policy.py`): **bulk** = all gates; **deep** = deep Firecrawl path fires for everyone; **refresh** = deep + LinkedIn agent fires even on complete-looking profiles |
+| `--max-credits N` | Run-level ceiling on deep Firecrawl credits (not per person) |
+| `--max-usd X` | Run-level USD ceiling across all billed vendors |
+| `--no-pdl` | Hard-disable PDL for this run (save the monthly quota) |
+| `--force-deep` | Deprecated alias for `--policy deep` |
 
-### How data is cleaned (automatic — no manual step)
+Policies change *which gates apply*; the spend ceilings stay active under every policy.
 
-Every claim, from every source, passes through **two** gates right before it's
-written:
+### Exit codes and stops
 
-1. **LLM reconciliation** (`reconcile.py`) — one Haiku call/person that merges
-   *semantically* duplicate résumé facts the dumb deduper can't: PDL's "Analyst,
-   TRS" + Firecrawl's "Investment Analyst at Teacher Retirement System
-   (2015–2018)" collapse into one canonical entry (title from one source, dates
-   from another), and a single current employer/title is chosen from competing
-   sources. Three hard guarantees: it **never invents** a fact (values are
-   constrained to what sources said), **never drops** a distinct company/school (a
-   token-overlap guard splits any wrong merge back apart), and **never raises**
-   (falls back to the raw set). Public mentions/links pass through untouched.
-2. **Deterministic digest** (`normalize.digest_claims`) — then:
-   - **Title-cases** professional values ("kbre" → "KBRE", "texas a&m" → "Texas A&M").
-   - **Drops junk** values (a boolean/placeholder like "True" or "N/A" never gets stored).
-   - **De-duplicates** exact case-insensitive repeats from overlapping sources.
+| Exit | Meaning | What to do |
+|---|---|---|
+| `0` | Finished the target set | — |
+| `1` | Nothing to enrich / bad args / missing required key | Check targets or `.env` |
+| `3` | **PDL quota exhausted** — current person rolled back, rest left pending | Top up / wait for renewal, re-run same command |
+| `4` | **Systemic abort** — 3 errors in a row (API down, auth) | Fix the cause, re-run |
+| `5` | **`--max-usd` ceiling hit** — stopped cleanly | Raise the cap or re-run later |
+| — | `AuthError` (401/403 from a provider) aborts immediately | Fix the key |
 
-Both run inline on every enrichment — no manual step. To apply reconciliation to
-people enriched *before* it existed (without re-charging PDL/Perplexity):
+Every person is committed individually; a crash or Ctrl+C resumes. A one-off error
+marks that person `error` (rolled back) and continues. **No half-built profile is
+ever saved.** Firecrawl credits exhausted mid-run aborts the batch (top up, re-run).
 
-```bash
-python reconcile_existing.py --dry-run    # preview before/after, write nothing
-python reconcile_existing.py              # apply, then `cd web && npm run sync-db`
-```
+### Reading the log
 
-The web app then does a third cleaning pass at render time (`web/lib/`): it
-re-title-cases everything, **merges duplicate jobs** (a dated role + its dateless
-prose twin collapse into one; multiple roles at one employer stack under that
-company), **groups education** (one card per school, degrees listed once), and
-hides any junk that slipped through. So a person with zero prior data comes in,
-gets cleaned on write, and is sorted + de-duplicated on display — start to finish,
-no hand-fixing.
-
-### Verified public mentions (Perplexity + Haiku)
-
-When `PERPLEXITY_API_KEY` is set, Phase 2 also runs a discovery pass that beat
-GNews/GDELT badly in testing (see `news_experiment.py`):
-
-1. **Perplexity Search** for the person (name + employer) — finds bios, firm
-   leadership pages, FINRA records, profiles, press.
-2. **Drop aggregator domains** — people-search / data-broker / salary-database
-   junk (`news_score`).
-3. **Claude Haiku identity check, strict** (`news_verify`) — a result counts ONLY
-   if the page is substantively *about the person* (their bio, interview, named
-   role, quote), not about their *company* (funding rounds, awards, firm pages)
-   and not a public-record lookup. Kills both namesakes and company-PR noise.
-
-PDL's deeper résumé extras get the same treatment: `pdl_verify` runs PDL's added
-career/education through a Haiku identity gate before trusting them, dropping
-clear namesake splices and junk (it caught "Horizon Air" mis-stored as a school)
-while keeping plausible entries. Current role / location / LinkedIn pass through.
-
-Survivors are stored as `public_links` claims → they render in the web
-"Mentions & appearances" section, and like all name-search results stay OUT of
-the hard résumé. Cost ≈ **$0.005/person + a small Haiku call** (~$7 for the full
-base). Key-gated and never-raises: unset the key and the pass simply skips.
-
-To experiment with strategies/sources before a big run:
-```bash
-python news_experiment.py --limit 12 --sources perplexity --verify --drop-aggregators
-```
-
----
-
-### Phase 2 — Enrich alumni profiles
-
-Searches the web, scrapes sources, runs Claude extraction, and writes structured claims per person.
-
-```bash
-# Smoke test — 5 people
-python phase2_enrich.py --limit 5
-
-# Larger batch
-python phase2_enrich.py --limit 100
-
-# Drain everything remaining (set limit > total pending)
-python phase2_enrich.py --limit 1200
-
-# One specific person
-python phase2_enrich.py --name "Jonah Kessler"
-```
-
-**Resumable:** Each person is committed individually. A crash or Ctrl+C resumes from where it left off — already-enriched people are skipped automatically.
-
-**Output per person (printed to stdout):**
 ```
 === Jonah Kessler | Veritas Ark Fund | Austin ===
-  Jonah Kessler: 4 sources -> 3 accepted (2 by pre-filter), 0 to review;
-  22 claims (+synth bio) (+2 PDL) (+1 press) (+2 verified mentions); 1 sent to Sonnet; 9 credits total
+  Deep Firecrawl: skipped (low signal — free baseline only)      # or: skipped (Firecrawl deep-path budget spent)
+  Firecrawl LinkedIn: skipped (<reason>) | not found (N credits) | no credits — skipped
+  Jonah Kessler: 4 sources -> 3 accepted ...; 22 claims (+2 PDL) (+2 verified mentions)
+Run cost (measured): $0.39 for 1 people -> data/cost_log.jsonl
 ```
 
-**Cost per person (approximate):**
-- Firecrawl: ~$0.008 (10 credits × $0.00083/credit)
-- Claude Haiku: ~$0.033
-- Claude Sonnet: ~$0.003
-- PDL (if key set, if matched): ~$0.028–$0.28
-- GNews: $0 (flat subscription, not per-call)
-- **Total: ~$0.04–$0.32/person depending on PDL match**
+### What happens per person (short)
 
-Costs are logged to `pipeline/data/cost_log.jsonl` after each run.
+1. **Baseline:** PDL match (identity-anchored on the roster; extras pass a Haiku
+   gate, `pdl_verify`) → Perplexity `/search` + Jina fetch → Sonnet identity gate →
+   Haiku structuring → verified mentions (`news_verify`, strictly *about the person*).
+2. **Deep (gated):** Firecrawl career scrape + news + LinkedIn read (search-corrected
+   URL, `linkedin_verify` fail-closed).
+3. **Write:** `reconcile.py` (Haiku; never invents, never drops, never raises) →
+   `normalize.digest_claims` → claims, `person_insights`, `person_company`,
+   `news_curated`, cost-log entry.
 
 ---
 
-### Phase 2 (backfill) — Add PDL + press-news + verified mentions to enriched people
-
-If you enriched people before PDL / press-news / Perplexity keys were set, use this to layer those sources on without re-running the expensive Firecrawl discovery. This is also how you run the **verified-mention pass on everyone already enriched**:
+## Two-pass workflow (the standard way to run a cohort)
 
 ```bash
-# All already-enriched people
-python enrich_news_only.py
-
-# One specific person
-python enrich_news_only.py --name "Jonah Kessler"
+python phase2_enrich.py --limit 50 --max-credits 0     # 1. base sweep: Firecrawl-free
+python compute_completeness.py                          # 2. score 0-100; sets needs_deep_search
+python phase2_enrich.py --needs-deep --limit 200 --max-credits 2500   # 3. deep pass
+python compute_completeness.py                          # 4. re-score; queue drains
 ```
 
-Safe to re-run — it reloads every existing claim, merges the new ones, then
-de-dupes + normalizes the whole set before writing, so re-runs converge instead
-of duplicating. (GNews has been retired; the Perplexity+Haiku verified-mention
-pass replaces it.)
+- The flag rule (`deep_search_flag.py`): **no current role OR fewer than 3 career
+  roles**. Bio/press/education gaps are deliberately *not* flagged.
+- Step 3 sets the sticky marker `person_insights.deep_search_done=1`, so each person
+  is deep-searched **at most once**; `compute_completeness` clears the flag on
+  profiles that became rich. Expect ~42% of reads to land — the rest are ghosts.
+- Size `--max-credits` for the deep pass at roughly `targets × 200`.
 
 ---
 
-### Phase 3 — Build insights and rollups
-
-Calculates aggregate statistics across the enriched dataset. Run after Phase 2 is complete.
+## Rerun / triage flow (already-enriched people)
 
 ```bash
-# Basic rollups only
-python phase3_insights.py
-
-# With LLM-generated narrative summaries (costs additional Claude tokens)
-python phase3_insights.py --use-llm
-
-# Specific class year only
-python phase3_insights.py --year 2020
+python profile_triage.py                  # SOLID / GOOD / WEAK / BROKEN breakdown (free)
+python preflight.py                       # keys, backup, targets, Firecrawl balance -> GO / NO-GO
+cp data/titans.db "data/titans.backup.$(date +%F)-prererun.db"     # preflight requires one
+python phase2_enrich.py --ids "$(python profile_triage.py --rerun-ids)" --max-credits 0
+python compute_completeness.py
+python phase2_enrich.py --needs-deep --limit 200 --max-credits 2500
+python compute_completeness.py && python preflight.py --report     # errored / zero-claim / thin
 ```
+
+`--rerun-ids` prints WEAK+BROKEN ids (`--include-good` adds GOOD).
+
+**Backup-compare gate (do this by hand before finalizing).** `--ids` / `--rerun-enriched`
+**wipe and rebuild** each target. A `--max-credits 0` rebuild can only re-fetch what
+PDL/Perplexity return *today*; a profile whose richness came from a source that
+can't be re-fetched (an old Firecrawl read, a page since taken down, a spent LinkedIn
+read) can come back thinner. Compare claim counts against the backup before you ship:
+
+```bash
+sqlite3 data/titans.db "ATTACH 'data/titans.backup.<date>-prererun.db' AS b;
+  SELECT n.person_id, (SELECT COUNT(*) FROM b.claims WHERE person_id=n.person_id) AS before, COUNT(*) AS after
+  FROM claims n GROUP BY n.person_id HAVING after < before*0.7;"
+```
+Anyone who regressed: restore just them from the backup, or re-run with `--needs-deep`.
 
 ---
 
-## Cost log
+## Phase 3 + finalize (after ANY enrichment batch)
 
-Every enrichment run appends a line to `pipeline/data/cost_log.jsonl`. Fields:
+```bash
+./finalize_pass.sh              # the 6 steps below
+SCORECARD=1 ./finalize_pass.sh  # + batch scorecard (data/scorecard.jsonl; hard gate must PASS)
+```
+
+| # | Step | Cost |
+|---|---|---|
+| 1 | `reclassify_sectors.py` — reflow `current_sector`/`first_sector`; Haiku upgrades the catch-all | pennies |
+| 2 | `compute_completeness.py` — 0-100 score + `needs_deep_search` flag | free |
+| 3 | `reclassify_levels.py` — cross-industry seniority ladder (`seniority_v2`), cached Haiku, trajectory table | pennies |
+| 4 | `phase3_insights.py --llm` — cohort snapshot (`--year` = snapshot year, default current UTC year). Must be `--llm` or titles/narrative revert to templated | 2 Haiku calls |
+| 5 | `npm run embed` — rebuild `person_vectors` for semantic search | free (local model) |
+| 6 | `npm run sync-db` — snapshot → `web/data/titans.db` (gitignored) | free |
+
+Steps are independent; a failure is reported and the rest continue. The script's
+closing reminder to "commit web/data/titans.db" is **stale** — see next section.
+
+Standalone: `python phase3_insights.py` (free, templated), `--llm`, `--year 2026`.
+`reclassify_*.py` accept `--dry-run` / `--no-llm`.
+
+---
+
+## Shipping data to the site
+
+`web/scripts/sync-db.mjs` (runs on `predev`/`prebuild`) picks the DB in this order,
+converting each to rollback-journal mode (WAL can't open read-only on Vercel):
+
+1. `TITANS_DB_URL` set → download the real display DB (production)
+2. `../pipeline/data/titans.db` → copy (local dev with real data)
+3. existing `web/data/titans.db` → keep
+4. `web/data/sample.db` → synthetic fallback (fresh clone)
+
+**Refresh production** (nothing is committed — only `sample.db` lives in git):
+
+```bash
+./finalize_pass.sh
+python make_display_db.py                # data/titans.db -> data/titans_display.db
+                                         # empties identity_candidates, person_sources, batch_status, geocode_cache
+# upload to the private Vercel Blob (operator, from the repo root with the Blob token in env):
+vercel blob put pipeline/data/titans_display.db --force
+# then redeploy (git push or `vercel --prod`); the build downloads TITANS_DB_URL
+```
+
+**Regenerate the public sample** after a schema change (never commit the real DB):
+`python make_sample_db.py data/titans.db ../web/data/sample.db`.
+
+Web env vars (`TITANS_DB_URL`, `ANTHROPIC_API_KEY`, `CHAT_TOKEN_SECRET`, `UPSTASH_*`)
+are documented in `web/.env.example`.
+
+---
+
+## Cost log — `data/cost_log.jsonl`
+
+One JSONL row per run (`cost_log.build_entry` / `append_entry`, append-only):
 
 | Field | Meaning |
 |---|---|
-| `timestamp` | ISO 8601 UTC timestamp of the run |
-| `label` | Run label (`enrich-5`, `"Jonah Kessler"`, etc.) |
-| `people` | Number of people processed this run |
-| `firecrawl_credits` | Credits consumed (measured from live meter delta, or estimated from scrape count if meter unavailable) |
-| `firecrawl_credits_estimated` | `true` = fell back to scrape-count estimate; `false` = authoritative meter delta |
-| `firecrawl_usd` | Firecrawl cost in USD |
-| `haiku_tokens_in/out` | Claude Haiku input/output tokens (career + bio + news extraction) |
-| `sonnet_tokens_in/out` | Claude Sonnet input/output tokens (identity resolution only) |
-| `claude_usd` | Total Claude cost in USD |
-| `total_usd` | `firecrawl_usd + claude_usd` (does NOT include PDL) |
-| `pdl_matches` | Number of people PDL matched |
-| `gnews_requests` | GNews requests made (informational only — GNews is flat subscription, not per-call) |
+| `timestamp`, `label`, `people` | UTC time; run label (`enrich-5`, `deep-12`, `rerun-34`, `ids-3`, `Texas A&M-2`, a name); people processed |
+| `firecrawl_credits`, `firecrawl_credits_estimated`, `firecrawl_usd` | Live meter delta (authoritative) or scrape-count estimate; $0.00083/credit |
+| `haiku_tokens_in/out`, `sonnet_tokens_in/out`, `claude_usd` | Claude tokens and cost, both models |
+| `pdl_matches`, `pdl_usd` | Matches × $0.28 (**notional** if you are on PDL's free tier) |
+| `perplexity_requests`, `perplexity_usd` | `/search` calls × $0.005 |
+| `sonar_requests`, `sonar_usd` | Sonar press calls; USD as reported by the API |
+| `gnews_requests` | Always 0 in current runs (GNews retired; informational) |
+| `total_usd` | `firecrawl + claude + pdl + perplexity + sonar` — **PDL is included** |
 
-PDL cost is not in `total_usd` — it's tracked separately by match count. At ~$0.28/match, multiply `pdl_matches` by $0.28 to estimate PDL spend.
+Rough all-in base-sweep cost: ~$0.40/person (`preflight.py` uses this).
 
 ---
 
-## Running the web app
+## Start fresh
 
 ```bash
-cd web
-npm install
-npm run dev        # development, port 3210
-npm run build      # production build check
-npm start          # production, port 3210
-```
+# A. Everything: rebuild from the directory
+rm data/titans.db && python cli.py ingest
 
-**The web app reads its own bundled copy of the DB at `web/data/titans.db`, NOT the pipeline's.** This is so the site can deploy to Vercel (where `pipeline/` isn't in the build). `npm run dev` and `npm run build` run `sync-db` automatically (via `predev` / `prebuild`), copying the latest `pipeline/data/titans.db` → `web/data/titans.db`.
-
-**After any enrichment run, refresh the site's data with:**
-```bash
-cd web && npm run sync-db      # copies pipeline DB -> web/data/titans.db
+# B. Keep people, wipe all enrichment + derived tables
+sqlite3 data/titans.db "DELETE FROM claims; DELETE FROM batch_status; DELETE FROM identity_candidates;
+  DELETE FROM person_sources; DELETE FROM person_insights; DELETE FROM person_company;
+  DELETE FROM news_curated; DELETE FROM person_role_levels; DELETE FROM insights_snapshot;
+  DELETE FROM person_vectors;"
 ```
-Then commit `web/data/titans.db` and redeploy if you're on Vercel. If the site looks stale after enriching, this is almost always the missing step.
+Leave `companies`, `role_level_cache`, `geocode_cache` — they are caches, not per-person
+data, and keep re-runs cheap. (`person_vectors` is created by `npm run embed`; ignore
+the error if it doesn't exist yet.) `clean_data.py` / `renormalize_claims.py` /
+`reconcile_existing.py` are one-time backfill tools, not part of a fresh run.
 
 ---
 
 ## Troubleshooting
 
-**Firecrawl out of credits**
-No longer fatal. A 0-credit state now **skips Firecrawl gracefully** per person
-("Firecrawl: no credits — career discovery skipped (using PDL + Perplexity only)")
-and the batch keeps producing profiles from PDL + Perplexity. Top up at
-[firecrawl.dev](https://firecrawl.dev) to restore scraped career pages; re-running
-a person re-adds Firecrawl data and reconciles it in.
+- **"Nothing to enrich (all targets done or none matched)"** — use `--name`, `--ids`,
+  or `--rerun-enriched`. Status: `sqlite3 data/titans.db "SELECT phase,status,COUNT(*) FROM batch_status GROUP BY 1,2;"`
+- **"RuntimeError: FIRECRAWL_API_KEY is not set"** — the key must exist even with 0
+  credits. Put it in the repo-root `.env`, not `pipeline/`.
+- **"Deep Firecrawl: skipped (Firecrawl deep-path budget spent)"** — `--max-credits`
+  reached, or the balance is 0. Expected on a base sweep; top up for a deep pass.
+- **Exit 3 / PDL 402** — the PDL dashboard count is not the API quota. Wait for the
+  monthly reset or upgrade; pending people are untouched.
+- **Overview looks stale after enriching** — you skipped `finalize_pass.sh`
+  (phase2 writes per-person data only) or didn't re-upload the display DB.
+- **Pending vs done:**
+  ```bash
+  sqlite3 data/titans.db "SELECT COUNT(*) FILTER (WHERE b.status='done') done,
+    COUNT(*) FILTER (WHERE b.status='error') errored, COUNT(*) FILTER (WHERE b.status IS NULL) pending
+    FROM people p LEFT JOIN batch_status b ON b.person_id=p.id AND b.phase='structuring' WHERE p.needs_review=0;"
+  ```
+- **Re-enrich someone who errored:** `python phase2_enrich.py --ids <id> --max-credits 0`.
+- **Undo a run:** `cp data/titans.backup.<date>-<label>.db data/titans.db`.
 
-**"Nothing to enrich (all targets done or none matched)"**
-All people are already enriched. Use `--name` to re-enrich a specific person, or check batch_status:
-```bash
-sqlite3 pipeline/data/titans.db "SELECT phase, status, COUNT(*) FROM batch_status GROUP BY phase, status;"
-```
-
-**"RuntimeError: FIRECRAWL_API_KEY is not set"**
-Add the key to `.env` at the repo root (not inside `pipeline/`).
-
-**Check how many people are pending vs done:**
-```bash
-sqlite3 pipeline/data/titans.db "
-  SELECT
-    COUNT(*) FILTER (WHERE b.status = 'done')  AS done,
-    COUNT(*) FILTER (WHERE b.status = 'error') AS errored,
-    COUNT(*) FILTER (WHERE b.status IS NULL)   AS pending
-  FROM people p
-  LEFT JOIN batch_status b ON b.person_id = p.id AND b.phase = 'structuring'
-  WHERE p.needs_review = 0;"
-```
-
-**Re-enrich a person who errored:**
-```bash
-# Reset their status
-sqlite3 pipeline/data/titans.db "DELETE FROM batch_status WHERE person_id = (SELECT id FROM people WHERE full_name = 'Jane Doe');"
-# Re-run
-python phase2_enrich.py --name "Jane Doe"
-```
+Tests: `python -m pytest -q` (≈790 today) — CI runs them on every push.

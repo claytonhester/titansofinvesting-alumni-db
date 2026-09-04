@@ -13,9 +13,9 @@ with max_credits, and prints the true credit cost (AgentResponse.credits_used +
 a get_credit_usage() delta as a cross-check) so we can decide if LinkedIn is
 worth folding into phase2_enrich.
 
-    python linkedin_probe.py                       # picks one enriched person
-    python linkedin_probe.py --name "Callum Dawes" --company "Chambers Energy Capital" --city Houston
-    python linkedin_probe.py --max-credits 60      # tighten/loosen the spend cap
+    python -m experiments.linkedin_probe                       # picks one enriched person
+    python -m experiments.linkedin_probe --name "Callum Dawes" --company "Chambers Energy Capital" --city Houston
+    python -m experiments.linkedin_probe --max-credits 60      # tighten/loosen the spend cap
 """
 from __future__ import annotations
 

@@ -18,7 +18,6 @@ Run as: ``python company_enrich.py --limit 100`` after a person wave.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 from pathlib import Path
@@ -34,7 +33,7 @@ from company_store import (
     init_company_schema,
     upsert_company,
 )
-from config import DB_PATH, REPO_ROOT
+from config import AuthError, DB_PATH, REPO_ROOT, optional_key
 from db import connect
 from directory_hosts import DIRECTORY_HOSTS, SOCIAL_HOSTS
 from person_company_store import init_person_company_schema, linked_domains
@@ -128,7 +127,8 @@ def enrich_company(
     """Enrich one firm by domain. Returns a matched CompanyRecord, a no-match
     SENTINEL (matched=False) when PDL returns 200 with no usable fields (so we
     cache the miss and don't re-pay), or None on a transient outage (so the caller
-    leaves it uncached to retry later). Never raises."""
+    leaves it uncached to retry later). Never raises — except AuthError on a
+    rejected key (401/403), which the run loop turns into a hard stop."""
     domain = _bare_domain(domain)
     if not domain or not api_key:
         return None
@@ -156,7 +156,9 @@ def enrich_company(
                 return None
             time.sleep(backoff_base ** attempt)
             continue
-        return None  # other 4xx: retrying won't help, but don't cache a bad key
+        if resp.status_code in (401, 403):
+            raise AuthError(f"PDL rejected the API key (HTTP {resp.status_code})")
+        return None  # other 4xx: retrying won't help
     if not isinstance(body, dict):
         return None
 
@@ -221,7 +223,7 @@ def run(db_path: str = str(DB_PATH), limit: int = 100) -> int:
     it on person_insights, then enriches the DISTINCT new domains (skipping any
     already in `companies`) up to `limit`. Idempotent: a second run enriches 0."""
     load_dotenv(REPO_ROOT / ".env", override=True)
-    api_key = os.getenv("PDL_API_KEY")
+    api_key = optional_key("PDL_API_KEY")
     if not api_key:
         print("PDL_API_KEY not set — cannot enrich companies.", file=sys.stderr)
         return 1
@@ -262,7 +264,14 @@ def run(db_path: str = str(DB_PATH), limit: int = 100) -> int:
         enriched = matched = 0
         with httpx.Client(timeout=30.0) as http:
             for domain in todo[:limit]:
-                rec = enrich_company(http, api_key, domain)
+                try:
+                    rec = enrich_company(http, api_key, domain)
+                except AuthError as exc:
+                    # A rejected key won't fix itself mid-loop; stop loudly rather
+                    # than print "transient failure" for every remaining firm.
+                    print(f"\nAUTH FAILURE — {exc}. Fix PDL_API_KEY and re-run.",
+                          file=sys.stderr)
+                    return 4
                 if rec is None:
                     print(f"  {domain}: transient failure — left uncached")
                     continue

@@ -1,5 +1,15 @@
 # Phase 2 Enrichment — Cost Analysis
 
+> **Historical — superseded (banner added 2026-09-03).** These figures model the
+> June 2 Firecrawl-only design (search → scrape ≤8 pages/person + Claude). The
+> pipeline has since moved to **PDL-first multi-source enrichment** (PDL résumé
+> spine + Perplexity `/search` + Jina + Sonar press, Haiku-verified) with a
+> **two-pass flow** (Firecrawl-free base sweep at `--max-credits 0`, then a gated
+> deep pass on `needs_deep_search` profiles). Real per-run spend is recorded in
+> `data/cost_log.jsonl` with per-vendor fields (`pdl_usd`, `perplexity_usd`,
+> `sonar_usd`, `claude_usd`, `firecrawl_usd`; `total_usd` includes PDL). Observed
+> all-in base-sweep cost is ~$0.40/person. See `RUNBOOK.md` for the current flow.
+
 **What this costs to build the intelligence DB for the Titans alumni.**
 Two vendors bill us: **Firecrawl** (search + scrape) and **Anthropic** (Claude).
 Numbers below are list-price estimates; the pipeline records the *authoritative*

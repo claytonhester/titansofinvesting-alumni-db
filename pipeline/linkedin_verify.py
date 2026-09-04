@@ -32,8 +32,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from anthropic import Anthropic
+from anthropic import Anthropic, AuthenticationError, PermissionDeniedError
 
+from config import AuthError
 from enrichment_store import ClaimRow
 from structuring import HAIKU_MODEL
 
@@ -185,7 +186,9 @@ def verify_linkedin_profile(
 ) -> tuple[LinkedInVerdict, int, int]:
     """Judge whether the agent's LinkedIn result is the roster person. Returns
     (verdict, haiku_in, haiku_out). Empty claims or any failure -> rejected
-    with zero tokens (fail-closed)."""
+    with zero tokens (fail-closed). The one failure that is NOT absorbed is a
+    rejected Anthropic key (401/403 -> config.AuthError): "rejected" would
+    read as a namesake verdict and hide a dead key for the whole batch."""
     if not claims:
         return (
             LinkedInVerdict(DECISION_REJECTED, "agent returned no claims", 0.0),
@@ -208,6 +211,8 @@ def verify_linkedin_profile(
         text = "".join(b.text for b in response.content if b.type == "text")
         tok_in = response.usage.input_tokens
         tok_out = response.usage.output_tokens
+    except (AuthenticationError, PermissionDeniedError) as exc:
+        raise AuthError(f"Anthropic rejected the API key ({exc.__class__.__name__})") from exc
     except Exception:
         return _REJECT_ON_ERROR, 0, 0
 

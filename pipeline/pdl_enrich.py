@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from config import AuthError
 from enrichment_store import ClaimRow
 
 PDL_ENRICH_URL = "https://api.peopledatalabs.com/v5/person/enrich"
@@ -41,8 +42,9 @@ class PdlUnavailable(Exception):
 
     Raised — deliberately — so the orchestrator STOPS the batch cleanly and leaves the
     remaining people un-enriched (still pending, re-runnable when the quota renews),
-    rather than silently falling back to a PDL-less baseline path for them. This is
-    the ONLY case enrich_pdl raises; every other failure still degrades to empty."""
+    rather than silently falling back to a PDL-less baseline path for them. Apart
+    from config.AuthError (a rejected key, HTTP 401/403 — also fatal by design),
+    this is the ONLY case enrich_pdl raises; every other failure degrades to empty."""
 
 # Skills are noisy and long-tailed; keep the most relevant handful.
 MAX_SKILLS = 12
@@ -127,7 +129,8 @@ def enrich_pdl(
     canonical ClaimRows. Returns an empty result (no claims, no cost) on a miss,
     a below-gate likelihood, or any network/parse failure. Raises PdlUnavailable
     ONLY when the monthly quota is exhausted (402 / persistent 429) so the caller can
-    stop the batch and leave the rest un-enriched rather than degrade them."""
+    stop the batch and leave the rest un-enriched rather than degrade them, and
+    AuthError when PDL rejects the key (401/403) — loud, never a silent miss."""
     name = full_name.strip()
     if not name:
         return _EMPTY
@@ -175,8 +178,10 @@ def _get_with_retry(
     backoff_base: float,
 ) -> dict | None:
     """One PDL enrich GET. 200 -> parsed JSON; 404 (no match at/above the gate) ->
-    None and NO charge; transient failures back off then yield None. Never raises:
-    a PDL hiccup degrades this person's enrichment, it doesn't abort the run."""
+    None and NO charge; transient failures back off then yield None. Never raises
+    for a PDL hiccup (that degrades this person, not the run) — only for the two
+    conditions that must stop the batch: quota (PdlUnavailable) and a rejected
+    key (AuthError)."""
     headers = {"X-Api-Key": api_key, "Accept": "application/json"}
     for attempt in range(attempts):
         try:
@@ -198,6 +203,10 @@ def _get_with_retry(
         if resp.status_code == 402:
             # Monthly enrichment quota exhausted — won't recover until renewal.
             raise PdlUnavailable("PDL enrichment quota exhausted (HTTP 402)")
+        if resp.status_code in (401, 403):
+            # A rejected key used to fall through to the silent `return None`
+            # below, so a whole run "completed" with zero PDL matches. Loud now.
+            raise AuthError(f"PDL rejected the API key (HTTP {resp.status_code})")
         if resp.status_code == 429 or resp.status_code >= 500:
             if attempt == attempts - 1:
                 # A 429 that outlasts our retries means the monthly quota is spent
@@ -207,7 +216,7 @@ def _get_with_retry(
                 return None
             time.sleep(backoff_base ** attempt)
             continue
-        # 4xx other than 404/402/429 (bad key, bad request): retrying can't help.
+        # 4xx other than 404/402/429/401/403 (bad request): retrying can't help.
         return None
     return None
 

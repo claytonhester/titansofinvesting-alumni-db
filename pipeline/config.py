@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,19 +20,19 @@ USER_AGENT = "Mozilla/5.0 (compatible; titans-research/1.0)"
 load_dotenv(REPO_ROOT / ".env", override=True)
 
 
-@dataclass(frozen=True)
-class Secrets:
-    """Stage-2 API keys. Empty in Stage 1 — never required to scrape the directory."""
+class AuthError(RuntimeError):
+    """An API rejected our key (HTTP 401/403).
 
-    firecrawl_api_key: str | None
-    anthropic_api_key: str | None
+    Raised — never swallowed — by the otherwise never-raises adapters (PDL,
+    Perplexity, Sonar, company enrich, the Claude verifier): a bad key never
+    self-heals, so degrading to "empty result" would silently churn a whole
+    batch into nothing. The orchestrator aborts on the first one instead."""
 
 
-def load_secrets() -> Secrets:
-    return Secrets(
-        firecrawl_api_key=os.getenv("FIRECRAWL_API_KEY") or None,
-        anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or None,
-    )
+def optional_key(name: str) -> str | None:
+    """A SOFT key: None when unset/blank so the caller skips that source cleanly
+    (PDL, Perplexity, GNews). Use require_key for keys a step cannot run without."""
+    return os.getenv(name) or None
 
 
 def require_key(name: str) -> str:

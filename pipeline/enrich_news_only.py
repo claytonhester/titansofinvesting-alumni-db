@@ -13,14 +13,13 @@ to profiles enriched before it existed.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 import httpx
 from anthropic import Anthropic
 from firecrawl import Firecrawl
 
-from config import DB_PATH, require_key
+from config import DB_PATH, optional_key, require_key
 from db import connect
 from discovery import discover_news
 from enrichment_store import ClaimRow, replace_claims
@@ -64,8 +63,8 @@ def _load_done_people(conn, name: str | None) -> list[dict]:
 def run(name: str | None) -> int:
     firecrawl = Firecrawl(api_key=require_key("FIRECRAWL_API_KEY"))
     anthropic = Anthropic(api_key=require_key("ANTHROPIC_API_KEY"))
-    pdl_key = os.getenv("PDL_API_KEY")
-    perplexity_key = os.getenv("PERPLEXITY_API_KEY")
+    pdl_key = optional_key("PDL_API_KEY")
+    perplexity_key = optional_key("PERPLEXITY_API_KEY")
 
     with connect(DB_PATH) as conn:
         people = _load_done_people(conn, name)

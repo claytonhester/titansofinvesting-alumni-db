@@ -1,5 +1,15 @@
 # Re-enrichment backlog — Classes 1 & 2 (Texas A&M + UT)
 
+> ## Status (2026-09-03)
+>
+> **Superseded — kept as history.** The ad-hoc backlog below was replaced by the
+> triage/rerun flow: `profile_triage.py --rerun-ids` → `phase2_enrich.py --ids …
+> --max-credits 0` → `compute_completeness.py` → `--needs-deep` deep pass →
+> `preflight.py --report` (see `RUNBOOK.md`). The June 11–12 rerun processed the
+> struggling profiles listed here. The Jina 0-source root cause noted at the bottom
+> was never diagnosed and still applies to no-PDL-match people. Names in this file
+> are synthetic.
+
 Run date: **2026-06-10**. This documents people from the class 1 & 2 (A&M + UT) batch
 who were **not enriched, or only thinly enriched**, so we know to revisit them. The
 clean-run rule was honored: **no degraded/PDL-less profiles were written** — people we

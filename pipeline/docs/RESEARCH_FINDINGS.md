@@ -1,5 +1,13 @@
 # Research Findings: How Others Build People-Enrichment Pipelines
 
+> **Historical — superseded (banner added 2026-09-03).** This review was written
+> against the June 2 Firecrawl-only design (`discovery.py` search-then-scrape as the
+> spine). Since then the spine became **PDL-first multi-source enrichment** (PDL +
+> Perplexity + Jina + Sonar, all identity-gated, merged by `reconcile.py`), run as a
+> **two-pass flow** (free base sweep → gated deep pass). The identity-gate,
+> provenance, and public-data-only conclusions still hold; the cost and tooling
+> specifics do not. Current per-vendor spend fields live in `cost_log.py`.
+
 > Cross-domain review of established practice in people-enrichment / OSINT / record-linkage,
 > mapped against the Titans pipeline. Goal: find where our design diverges from mature
 > practice *before* scaling to 1,056 people and spending real money.

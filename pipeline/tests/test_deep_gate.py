@@ -48,3 +48,11 @@ def test_zero_budget_never_fires() -> None:
 def test_negative_budget_clamped() -> None:
     b = FirecrawlBudget(-100)
     assert b.remaining == 0 and b.decide().fire is False
+
+
+@pytest.mark.unit
+def test_none_budget_means_zero_not_typeerror() -> None:
+    # An unknown live balance (meter error) must degrade to a Firecrawl-free
+    # run, not crash the orchestrator at construction.
+    b = FirecrawlBudget(None)
+    assert b.remaining == 0 and b.decide().fire is False

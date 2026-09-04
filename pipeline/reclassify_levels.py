@@ -31,6 +31,7 @@ from anthropic import Anthropic
 from career_analysis import career_entries
 from config import require_key
 from enrichment_store import ClaimRow
+from migrations import migrate
 from person_insights_store import init_person_insights_schema
 from role_level_store import (
     init_role_level_schema,
@@ -246,6 +247,7 @@ def main() -> None:
     conn.row_factory = sqlite3.Row
     init_person_insights_schema(conn)
     init_role_level_schema(conn)
+    migrate(conn)
 
     people = conn.execute(
         "SELECT person_id, grad_year, current_sector, first_sector, "

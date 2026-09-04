@@ -57,7 +57,11 @@ provide data or credentials.
 2. **Tests** — add or update them. Run the suites:
    - Pipeline: `cd pipeline && pytest`
    - Web: `cd web && npm test`
-3. **Lint / types** (web): `npm run lint`.
+3. **Lint / types** (web): `npm run lint` and `npx tsc --noEmit`.
+   CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs both test
+   suites plus the web lint, typecheck, and production build on every push and
+   PR — no API keys are needed for any of it. Playwright e2e (`npm run test:e2e`)
+   is local-only.
 4. **Conventional commits** for messages: `feat:`, `fix:`, `refactor:`,
    `docs:`, `test:`, `chore:`, `perf:`, `ci:`.
 5. **Open a PR** describing the change and how you verified it. Fill in the PR
@@ -76,7 +80,7 @@ If a schema change makes the sample DB stale, regenerate it (never commit the
 real DB):
 
 ```bash
-python pipeline/make_sample_db.py
+cd pipeline && python make_sample_db.py data/titans.db ../web/data/sample.db
 ```
 
 That's it. Thanks for contributing.

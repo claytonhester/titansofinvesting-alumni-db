@@ -21,6 +21,16 @@ import httpx
 from perplexity_enrich import fetch_perplexity
 
 _LINKEDIN_IN_RE = re.compile(r"linkedin\.com/in/[^\s/?\"')]+", re.I)
+
+# extraction_method for a search-resolved linkedin_url claim that has NOT been
+# through the fail-closed verifier and is carried by a single search result.
+# Persisted at low confidence for provenance only; nothing downstream may treat
+# it as "this person's LinkedIn" (the batch-1 namesake-echo finding).
+SEARCH_UNVERIFIED_METHOD = "search-unverified"
+SEARCH_UNVERIFIED_CONFIDENCE = 0.4
+# A search-resolved URL counts as corroborated when at least this many DISTINCT
+# search results (different pages) carry the same profile slug.
+MIN_INDEPENDENT_HITS = 2
 # A token must be at least this long to count as an employer/school match, so
 # "co"/"of"/"the" can't manufacture a false corroboration.
 _MIN_TOKEN = 4
@@ -32,6 +42,7 @@ class LinkedInCandidate:
     score: float    # higher = more corroborated by the search snippet
     evidence: str   # which anchors matched (name/employer/school/slug)
     source: str     # "search" or "pdl"
+    hits: int = 1   # distinct search results carrying this URL (independent corroboration)
 
 
 def _normalize(raw: str) -> str:
@@ -83,16 +94,25 @@ def search_linkedin_candidates(
     results = fetch_perplexity(http, api_key, name, employer=hint, max_results=max_results)
     last = name.strip().split()[-1].lower() if name.strip().split() else ""
     best: dict[str, LinkedInCandidate] = {}
+    # Which distinct result pages carried each profile URL. The LinkedIn page
+    # itself plus, say, a firm bio linking to it = two independent sources; the
+    # same page twice is one.
+    pages: dict[str, set[str]] = {}
     for r in results:
         url = _normalize(r.url) or _normalize(r.snippet)
         if not url:
             continue
         score, ev = _score(url, f"{r.title} {r.snippet}", last=last,
                             employer=employer, school=school)
+        pages.setdefault(url, set()).add((r.url or "").strip().lower() or url)
         cand = LinkedInCandidate(url, score, ev, "search")
         if url not in best or score > best[url].score:
             best[url] = cand
-    return sorted(best.values(), key=lambda c: -c.score)
+    ranked = [
+        LinkedInCandidate(c.url, c.score, c.evidence, c.source, hits=len(pages[c.url]))
+        for c in best.values()
+    ]
+    return sorted(ranked, key=lambda c: -c.score)
 
 
 def choose_linkedin_url(

@@ -10,7 +10,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from gnews_enrich import (
+from experiments.gnews_enrich import (
     CLAIM_TYPE,
     EXTRACTION_METHOD,
     NEWS_CONFIDENCE,

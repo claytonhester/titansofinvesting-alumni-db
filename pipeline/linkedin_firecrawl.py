@@ -24,6 +24,7 @@ status, success, error}``. First exercised live once Firecrawl has credits.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
@@ -31,6 +32,8 @@ from firecrawl import Firecrawl
 from firecrawl.v2.utils.error_handler import PaymentRequiredError
 
 from enrichment_store import ClaimRow
+
+_log = logging.getLogger(__name__)
 
 # Regex patterns for detecting "present" career entries in value/quote fields.
 # value format: "Title at Company (YYYY-present)"
@@ -267,7 +270,8 @@ def _as_dict(data: object) -> dict:
     if callable(dump):
         try:
             return dump()
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — treat as "agent returned nothing"
+            _log.warning("linkedin agent: could not read response data (%s)", exc)
             return {}
     return {}
 
@@ -467,7 +471,8 @@ def fetch_linkedin(
         )
     except PaymentRequiredError:
         raise
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 — a failed agent call is a not-found
+        _log.warning("linkedin agent call failed for %s: %s", name, exc)
         return _EMPTY
 
     if getattr(resp, "error", None) or getattr(resp, "status", "") not in ("completed", "", None):

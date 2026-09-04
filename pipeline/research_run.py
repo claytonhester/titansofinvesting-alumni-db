@@ -25,7 +25,6 @@ Safety:
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import sys
 from datetime import datetime
@@ -42,7 +41,7 @@ from cost_log import (
     build_entry,
     claude_usd,
 )
-from config import DB_PATH
+from config import DB_PATH, optional_key
 from db import connect
 from enrichment_store import ClaimRow, append_claims
 from http_fetch import fetch_article
@@ -151,9 +150,9 @@ def main() -> int:
             print(f"  [{p['id']}] {p['full_name']:<22} gaps: {', '.join(g) or 'none'}")
         return 0
 
-    pplx_key = os.getenv("PERPLEXITY_API_KEY") if sonar_on else None
-    pdl_key = os.getenv("PDL_API_KEY") if pdl_on else None
-    anthro_key = os.getenv("ANTHROPIC_API_KEY")
+    pplx_key = optional_key("PERPLEXITY_API_KEY") if sonar_on else None
+    pdl_key = optional_key("PDL_API_KEY") if pdl_on else None
+    anthro_key = optional_key("ANTHROPIC_API_KEY")
     if sonar_on and not pplx_key:
         print("PERPLEXITY_API_KEY not set — Sonar disabled.")
     if pdl_on and not pdl_key:

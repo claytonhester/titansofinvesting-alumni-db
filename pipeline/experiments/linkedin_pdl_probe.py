@@ -4,7 +4,7 @@ For each person id, seed the (now tolerant, uncapped) LinkedIn agent with the
 profile URL already on file and compare its yield to what PDL gave. Persists
 NOTHING — pure measurement so we can finally settle the Firecrawl-vs-PDL plan.
 
-    python linkedin_pdl_probe.py 2 198 277 356 593 672 790
+    python -m experiments.linkedin_pdl_probe 2 198 277 356 593 672 790
 """
 from __future__ import annotations
 

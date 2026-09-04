@@ -8,10 +8,10 @@ before committing to a 1,000-person run.
 It never writes to the claims table; results go to stdout and a markdown report.
 
     # 12-person sample, both sources (default)
-    python news_experiment.py
+    python -m experiments.news_experiment
 
     # bigger sample, GDELT only (free, no GNews quota used), wider window
-    python news_experiment.py --limit 25 --sources gdelt --timespan 36m
+    python -m experiments.news_experiment --limit 25 --sources gdelt --timespan 36m
 
 GNews note: each GNews strategy issues one request per person against your daily
 quota (free tier ~100/day). The harness prints the request count up front.
@@ -30,8 +30,8 @@ import httpx
 from anthropic import Anthropic
 
 from config import DB_PATH
-from gdelt_enrich import fetch_gdelt
-from gnews_enrich import fetch_news
+from experiments.gdelt_enrich import fetch_gdelt
+from experiments.gnews_enrich import fetch_news
 from news_score import MentionScore, normalize_domain, score_mention
 from news_verify import Candidate, verify_hits
 from perplexity_enrich import fetch_perplexity

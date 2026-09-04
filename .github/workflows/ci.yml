@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pipeline:
+    name: pipeline (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+      - name: Install
+        run: pip install -r pipeline/requirements.txt
+      - name: Test
+        # No API keys in CI: the suite is pure logic + SQLite and passes with none set.
+        working-directory: pipeline
+        run: python -m pytest -q
+
+  web:
+    name: web (lint, tsc, vitest, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install
+        # Pulls prebuilt binaries for sharp / better-sqlite3 — fine on GitHub runners.
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Unit tests
+        run: npx vitest run
+      - name: Build
+        # prebuild runs sync-db; with no TITANS_DB_URL it falls back to the
+        # committed synthetic web/data/sample.db.
+        run: npm run build
+
+  # Playwright e2e (web/tests, port 3210) is intentionally NOT run here: it needs
+  # browser binaries and a running server. Run locally with `npm run test:e2e`.

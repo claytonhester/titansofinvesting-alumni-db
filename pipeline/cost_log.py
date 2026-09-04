@@ -17,11 +17,14 @@ inspectable without a DB migration. Append-only: never rewrite past entries.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from config import DATA_DIR
+
+_log = logging.getLogger(__name__)
 
 # --- Price references (update here if plans change). -----------------------
 # Firecrawl Standard plan: 100k credits for $83.
@@ -53,7 +56,8 @@ def remaining_credits(client) -> int | None:
     a cost-meter hiccup must not abort an enrichment run."""
     try:
         usage = client.get_credit_usage()
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 — the run treats None as "unknown"
+        _log.warning("Firecrawl credit meter unavailable: %s", exc)
         return None
     return getattr(usage, "remaining_credits", None)
 

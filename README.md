@@ -1,5 +1,7 @@
 # Titans of Investing — Alumni Intelligence
 
+[![CI](https://github.com/claytonhester/titansofinvesting-alumni-db/actions/workflows/ci.yml/badge.svg)](https://github.com/claytonhester/titansofinvesting-alumni-db/actions/workflows/ci.yml)
+
 A searchable, analytical directory of **Titans of Investing** alumni — assembled
 from the program's public class directory and enriched with source-attributed,
 publicly available career data. It answers questions a static alumni list can't:
@@ -20,11 +22,12 @@ The project is two halves that share one SQLite database:
 **This repository ships a small synthetic _sample_ database, not the real
 dataset.** `web/data/sample.db` contains ~15 fabricated alumni so the app runs
 out of the box; the real alumni data is never committed here. (A production
-deployment loads the real DB at build time from a private URL — see
+deployment downloads a display-only copy of the real DB at build time from a
+private Vercel Blob via `TITANS_DB_URL` — see
 [`web/scripts/sync-db.mjs`](web/scripts/sync-db.mjs).)
 
-The starting roster comes from the **public** Titans of Investing class
-directory. Enrichment adds only **publicly available, source-attributed**
+The starting roster (1,056 alumni as of June 2026) comes from the **public**
+Titans of Investing class directory. Enrichment adds only **publicly available, source-attributed**
 career facts (each claim stores its source URL and a verbatim quote so a human
 can verify it). The app is **read-only**. No private or behind-login data is
 collected, and the pipeline is built to refuse low-confidence identity matches
@@ -65,7 +68,9 @@ Public class directory
    rung (Entry → Manager → Senior Leadership → Executive), career velocity, and
    the position-by-position trajectory.
 4. **Roll up** — aggregate the cohort into the Overview's KPIs and charts.
-5. **Serve** — the web app reads a bundled snapshot of the DB (read-only).
+5. **Serve** — the web app reads a bundled snapshot of the DB (read-only):
+   `sample.db` in a fresh clone, or the display-only real DB downloaded from
+   `TITANS_DB_URL` at build time in production.
 
 See [`RUNBOOK.md`](RUNBOOK.md) for the exact commands to run each stage.
 
@@ -105,8 +110,9 @@ sequence is documented in [`RUNBOOK.md`](RUNBOOK.md); the short version:
 
 ```bash
 cd pipeline
-python phase2_enrich.py      # enrich a batch
-./finalize_pass.sh           # sectors → completeness → seniority → snapshot → sync
+python phase2_enrich.py --limit 50 --max-credits 0   # Firecrawl-free base sweep
+./finalize_pass.sh           # sectors → completeness → seniority → snapshot → embed → sync
+python make_display_db.py    # display-only copy to upload to the private Blob
 ```
 
 ### Environment variables
@@ -119,6 +125,7 @@ each and what breaks if it's missing, lives in
 
 | Variable | For | Notes |
 |---|---|---|
+| `TITANS_DB_URL` | prod data | build-time download of the display-only real DB; unset → `sample.db` |
 | `ANTHROPIC_API_KEY` | chat | chat is off without it; site unaffected |
 | `CHAT_TOKEN_SECRET` | chat (prod) | unset → chat gate is forgeable |
 | `UPSTASH_REDIS_REST_URL` / `_TOKEN` | chat on Vercel | shared rate limit + $100/mo spend cap; unset → per-instance, unreliable |
@@ -144,7 +151,9 @@ root [`.env.example`](.env.example).
 ## Contributing & license
 
 Contributions to the **code** are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
-for setup, the sample-data rules, and the PR process. Please also read the
+for setup, the sample-data rules, and the PR process. CI (GitHub Actions) runs the
+pipeline pytest suite and the web lint / typecheck / vitest / build on every push
+and pull request. Please also read the
 [Code of Conduct](CODE_OF_CONDUCT.md). Security and data-removal requests go
 through [SECURITY.md](SECURITY.md).
 

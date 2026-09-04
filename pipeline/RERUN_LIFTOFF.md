@@ -7,7 +7,12 @@ are GOOD, so we leave 76 alone. The 34 fit the current budget (~$14) with no
 top-up. Then deep-pass the thin survivors.
 
 All commands run from `pipeline/` with the venv active: `source .venv/bin/activate`.
-**Nothing here has been run yet.** Wait until you're ready, then go top to bottom.
+
+> **Status: EXECUTED (June 11–12, 2026).** The triage rerun (84 people across the
+> base sweep + deep passes) ran to completion: cohort scorecard **D/66 → B/84**,
+> deep-search queue drained. Kept as the reference procedure; the generic version
+> lives in `RUNBOOK.md` → "Rerun / triage flow". Edits on 2026-09-03: test count,
+> `--max-credits` semantics, and the publish step (no DB is committed any more).
 
 ---
 
@@ -16,7 +21,7 @@ All commands run from `pipeline/` with the venv active: `source .venv/bin/activa
 ```bash
 python profile_triage.py          # see the SOLID/GOOD/WEAK/BROKEN breakdown
 python preflight.py               # must print === GO ===
-python -m pytest tests -q         # expect: 760 passed
+python -m pytest tests -q         # expect: ≈790 passed
 ```
 `profile_triage.py` grades every profile on completeness, coherence,
 corroboration, and PDL spine. The **rerun set = WEAK+BROKEN**. Eyeball it; if a
@@ -27,8 +32,9 @@ SOLID/GOOD person actually looks wrong, you can add them by id in step 2.
 ```bash
 cp data/titans.db "data/titans.backup.$(date +%F)-prererun.db"
 ```
-The web app reads the *synced* `web/data/titans.db`, so nothing below goes live
-until step 6. Pipeline runs only touch `pipeline/data/titans.db`.
+The web app reads the *synced* `web/data/titans.db` locally and the Blob-hosted
+display DB in production, so nothing below goes live until step 6. Pipeline runs
+only touch `pipeline/data/titans.db`.
 
 ## 2. Rebuild the struggling profiles (PDL + URL + news, $0 Firecrawl)
 
@@ -67,7 +73,9 @@ python phase2_enrich.py --needs-deep --limit 200 --max-credits 250
   LinkedIn URL. Lands ~42% (the rest are genuine ghosts — the read refuses for ~0
   credits). Sets `deep_search_done` so each person is tried **at most once** (the
   queue drains; no re-spend on re-run).
-- `--max-credits 250` caps Firecrawl per person. Firecrawl balance is ~87k credits.
+- `--max-credits 250` is a **run-level** ceiling on deep-path Firecrawl credits
+  (not per person) — size it at roughly `targets × 200` for a deep pass. Firecrawl
+  balance was ~87k credits at the time.
 
 ## 5. Re-score + the "couldn't enrich" report (free)
 
@@ -84,8 +92,10 @@ still incomplete). This is the "note who we couldn't enrich" list.
 ```bash
 SCORECARD=1 ./finalize_pass.sh        # sectors, completeness, insights, embed, sync-db, scorecard
 ```
-The scorecard hard-gate must PASS (no future-date P0, no gold violation). This is
-also what copies the pipeline DB → `web/data/titans.db` (the live snapshot).
+The scorecard hard-gate must PASS (no future-date P0, no gold violation). `sync-db`
+refreshes the local (gitignored) `web/data/titans.db`; to update production, run
+`python make_display_db.py` and upload `data/titans_display.db` to the private Vercel
+Blob (`vercel blob put … --force`), then redeploy — see `RUNBOOK.md` → "Shipping data".
 
 ---
 

@@ -1,5 +1,14 @@
 # "Press a Button to Run It Again" — Operational Re-run Plan
 
+> **Historical — superseded (banner added 2026-09-03).** Written for the June 2
+> Firecrawl-only design. The "refresh everyone" button now exists as
+> `--rerun-enriched` / `--ids` (wipe-and-rebuild in place) plus `preflight.py`
+> (GO/NO-GO) and `profile_triage.py --rerun-ids` (who actually needs it), run as the
+> **two-pass flow** on the **PDL-first multi-source** pipeline. Cost accounting moved
+> to the per-vendor `cost_log.jsonl` fields (`total_usd` includes PDL). The
+> resumability and one-person-per-commit guarantees described below still hold.
+> See `RUNBOOK.md` → "Rerun / triage flow" for the current procedure.
+
 Goal: let a non-engineer (the boss) kick off enrichment — the first build, or a
 later refresh — without touching code, and know what it will cost before it runs.
 

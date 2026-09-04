@@ -5,9 +5,9 @@ structuring call) over a small sample of real alumni, dumps the raw evidence
 and the structured profile, and reports actual Firecrawl credits + Claude
 tokens so we can extrapolate the 1,056-person run before committing to it.
 
-    python phase2_discover.py --limit 5            # random 5 from DB
-    python phase2_discover.py --name "Jane Doe"    # one specific person
-    python phase2_discover.py --limit 5 --dump out # also write raw markdown
+    python -m experiments.phase2_discover --limit 5            # random 5 from DB
+    python -m experiments.phase2_discover --name "Jane Doe"    # one specific person
+    python -m experiments.phase2_discover --limit 5 --dump out # also write raw markdown
 """
 from __future__ import annotations
 

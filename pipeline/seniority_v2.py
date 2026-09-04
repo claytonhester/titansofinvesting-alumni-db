@@ -29,11 +29,16 @@ Haiku call. Both paths only ever emit a label from LEVELS or NON_TITLE.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from anthropic import Anthropic
+from anthropic import Anthropic, AuthenticationError, PermissionDeniedError
+
+from config import AuthError
+
+_log = logging.getLogger(__name__)
 
 # Career order, shallow -> senior. Index IS the rank; thresholds compare indices.
 LEVELS: tuple[str, ...] = (
@@ -332,7 +337,11 @@ def classify_levels(
             mapping = _parse_json(text)
             tok_in += resp.usage.input_tokens
             tok_out += resp.usage.output_tokens
-        except Exception:
+        except (AuthenticationError, PermissionDeniedError) as exc:
+            raise AuthError(f"Anthropic rejected the API key ({exc.__class__.__name__})") from exc
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("seniority: Claude call failed for a chunk of %d roles, "
+                         "using keyword fallback: %s", len(ids), exc)
             mapping = {}  # whole chunk degrades to fallback below
 
         for rid, pair in ids.items():

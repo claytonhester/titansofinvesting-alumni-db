@@ -36,6 +36,8 @@ from db import connect
 from deep_search_flag import should_flag_for_deep_search
 from directory_hosts import registrable_host
 from enrichment_store import ClaimRow
+from linkedin_search import SEARCH_UNVERIFIED_METHOD
+from migrations import migrate
 from person_insights_store import init_person_insights_schema
 
 # Component weights — must sum to 100 (asserted below so a future tweak that
@@ -101,9 +103,12 @@ def compute_breakdown(claims: list[ClaimRow]) -> CompletenessBreakdown:
     )
     has_press = bool(by_type.get("news_mention"))
     # A LinkedIn URL can arrive as a public_links claim OR as the dedicated
-    # linkedin_url claim the search-resolver records — count either.
+    # linkedin_url claim the search-resolver records — count either, EXCEPT a
+    # search-unverified one: that is a single-result guess kept for provenance,
+    # and crediting it would mark a namesake echo as "profile found".
     has_linkedin = any(
-        _is_linkedin_url(c.source_url) or _is_linkedin_url(c.value)
+        (_is_linkedin_url(c.source_url) or _is_linkedin_url(c.value))
+        and c.extraction_method != SEARCH_UNVERIFIED_METHOD
         for c in by_type.get("public_links", []) + by_type.get("linkedin_url", [])
     )
     dated = sum(1 for c in career if _career_entry_dated(c))
@@ -172,7 +177,8 @@ def recompute_completeness(
 
 def run(db_path: str, dry_run: bool) -> int:
     with connect(Path(db_path)) as conn:
-        init_person_insights_schema(conn)  # additive migration for the column
+        init_person_insights_schema(conn)
+        migrate(conn)  # additive columns (completeness/deep-search) + version stamp
         people = conn.execute(
             "SELECT pi.person_id, p.full_name, pi.completeness_score, "
             "pi.deep_search_done "

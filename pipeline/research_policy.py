@@ -8,8 +8,8 @@ shut — the Grant Larkin case: a "complete-looking" profile skipped the LinkedI
 agent, so its stale titles and missing dates were never refreshed.
 
 Policy governs gate CRITERIA only. The spend ceilings (LinkedInBudget,
-FirecrawlBudget, --max-credits, --max-usd) stay active under every policy —
-an open gate never means unbounded spend.
+FirecrawlBudget, phase2_enrich's --max-credits and --max-usd) stay active under
+every policy — an open gate never means unbounded spend.
 
     BULK     today's pipeline exactly: every gate's criteria enforce.
              For first-pass cohort runs where credit efficiency matters.

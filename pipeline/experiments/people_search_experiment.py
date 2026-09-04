@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 from news_score import is_aggregator_domain, normalize_domain
 from news_verify import Candidate, verify_hits
-from perplexity_agent import run_agent
+from experiments.perplexity_agent import run_agent
 
 CLASS3 = [
     "Piper Lockhart", "Marisa Oyelaran", "Bianca Rutledge", "Gavin Ostrander",

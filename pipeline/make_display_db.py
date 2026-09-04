@@ -2,14 +2,23 @@
 
 The live website is meant to be public — it serves the directory, insights, and
 person/company pages to the world. But the full research database also holds
-behind-the-scenes tables that are NOT rendered anywhere and should not leave the
-machine: raw identity-match candidates, source-discovery logs, pipeline run
-status, and geocode caches.
+behind-the-scenes tables whose ROWS should not leave the machine: raw
+identity-match candidates (namesake URLs the gate rejected), source-discovery
+logs, pipeline run status, and geocode caches.
 
-This script produces a copy that keeps ONLY what the frontend actually reads and
-empties the internal tables, so the file we host (e.g. on Vercel Blob, which the
-server reads via TITANS_DB_URL) exposes nothing beyond what's already public on
-the site. It is deterministic and safe to re-run on every data refresh.
+This script produces a copy that empties those internal tables, so the file we
+host (on Vercel Blob, which the server reads via TITANS_DB_URL) exposes nothing
+beyond what's already public on the site. It is deterministic and safe to re-run
+on every data refresh.
+
+What the web app does with the emptied tables (keep this accurate — an earlier
+version of this docstring claimed they were "not rendered anywhere", which was
+false: the Build Status page counted person_sources and identity_candidates):
+  * person_sources     — the web no longer reads it; the per-person "sources"
+                         count is derived from the claims table instead.
+  * identity_candidates — the web reads it only for the "to review" stat, and
+                         hides that stat when the table is empty (display DB).
+  * batch_status, geocode_cache — never read by the web.
 
 Usage:
     python make_display_db.py [SOURCE_DB] [OUTPUT_DB]
@@ -22,9 +31,9 @@ import sqlite3
 import sys
 from pathlib import Path
 
-# Tables the web app NEVER reads — internal research scaffolding. Emptied (not
-# dropped, so the schema stays identical to the real DB for any code that
-# introspects it).
+# Internal research scaffolding, emptied for hosting (see the module docstring
+# for how the web copes with each one being empty). Emptied, not dropped, so the
+# schema stays identical to the real DB for any code that introspects it.
 INTERNAL_TABLES = (
     "identity_candidates",
     "person_sources",

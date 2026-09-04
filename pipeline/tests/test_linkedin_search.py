@@ -77,3 +77,26 @@ def test_strong_single_search_with_no_pdl():
 def test_ambiguous_tie_no_pdl_makes_no_pick():
     url, why = choose_linkedin_url("", [_c("a-1", 3.0), _c("a-2", 3.0)])
     assert url == "" and "ambiguous" in why
+
+
+# --- independent-hit counting (corroboration for the search-resolved claim) ----
+
+def test_hits_count_distinct_result_pages(monkeypatch):
+    import linkedin_search
+    from perplexity_enrich import PerplexityResult
+    results = [
+        PerplexityResult("Jane Doe - Acme | LinkedIn",
+                         "https://www.linkedin.com/in/jane-doe", "Jane Doe at Acme", ""),
+        PerplexityResult("Our team", "https://acme.com/team",
+                         "Jane Doe ... linkedin.com/in/jane-doe", ""),
+        PerplexityResult("Jane Doe - Acme | LinkedIn",   # same page again
+                         "https://www.linkedin.com/in/jane-doe", "dup", ""),
+        PerplexityResult("Other Jane", "https://www.linkedin.com/in/jane-doe-2",
+                         "Jane Doe, Bank", ""),
+    ]
+    monkeypatch.setattr(linkedin_search, "fetch_perplexity", lambda *a, **k: results)
+    cands = linkedin_search.search_linkedin_candidates(
+        object(), "key", "Jane Doe", employer="Acme")
+    by_url = {c.url: c for c in cands}
+    assert by_url["https://linkedin.com/in/jane-doe"].hits == 2      # profile + firm bio
+    assert by_url["https://linkedin.com/in/jane-doe-2"].hits == 1

@@ -20,6 +20,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from migrations import ensure_people_research_company
 from models import slugify
 
 DB_PATH = Path(__file__).parent / "data" / "titans.db"
@@ -54,9 +55,9 @@ def research_company(initial_company: str) -> str:
 
 
 def ensure_column(conn: sqlite3.Connection) -> None:
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(people)")}
-    if "research_company" not in cols:
-        conn.execute("ALTER TABLE people ADD COLUMN research_company TEXT NOT NULL DEFAULT ''")
+    """Kept as the local name callers use; the ALTER itself now lives with the
+    other additive migrations so migrate() applies it everywhere."""
+    ensure_people_research_company(conn)
 
 
 def run(dry_run: bool) -> int:

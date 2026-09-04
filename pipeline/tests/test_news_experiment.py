@@ -1,6 +1,6 @@
 """Unit tests for the news experiment harness's pure helpers."""
-from news_experiment import even_sample
-from gnews_enrich import build_query as gnews_build_query
+from experiments.news_experiment import even_sample
+from experiments.gnews_enrich import build_query as gnews_build_query
 
 
 class TestEvenSample:

@@ -6,7 +6,7 @@ typed mentions + cost, including the lenient JSON recovery and tool-call countin
 """
 from __future__ import annotations
 
-from perplexity_agent import (
+from experiments.perplexity_agent import (
     AgentResult,
     _extract_mentions,
     _loads_lenient,
@@ -74,7 +74,7 @@ def test_tool_calls_handles_plain_int_and_missing():
 
 
 def test_confirmed_filters_to_matches():
-    from perplexity_agent import AgentMention
+    from experiments.perplexity_agent import AgentMention
 
     res = AgentResult(
         mentions=(

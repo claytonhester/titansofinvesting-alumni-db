@@ -17,12 +17,13 @@ for human review, never auto-merged.
     python phase2_enrich.py --name "Jane Doe"
 
 Note: this is the production-shaped path and bills both Firecrawl and Claude.
-For pure cost measurement on a throwaway sample, use phase2_discover.py.
+For pure cost measurement on a throwaway sample, use the frozen
+experiments/phase2_discover.py (python -m experiments.phase2_discover).
 """
 from __future__ import annotations
 
 import argparse
-import os
+import logging
 import re
 import sqlite3
 import sys
@@ -30,10 +31,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
-from anthropic import Anthropic
+from anthropic import Anthropic, AuthenticationError, PermissionDeniedError
 from firecrawl import Firecrawl
 
-from config import DB_PATH, require_key
+from config import DB_PATH, AuthError, optional_key, require_key
 from cost_log import PDL_USD_PER_MATCH, append_entry, build_entry, remaining_credits
 from mention_discovery import discover_mentions
 from news_enrich import extract_news_mentions
@@ -49,7 +50,14 @@ from linkedin_firecrawl import (
     fetch_linkedin,
 )
 from linkedin_verify import verify_linkedin_profile
-from linkedin_search import choose_linkedin_url, search_linkedin_candidates
+from linkedin_search import (
+    MIN_INDEPENDENT_HITS,
+    SEARCH_UNVERIFIED_CONFIDENCE,
+    SEARCH_UNVERIFIED_METHOD,
+    _normalize as _normalize_linkedin,
+    choose_linkedin_url,
+    search_linkedin_candidates,
+)
 from research_policy import (
     ResearchPolicy,
     bypass_linkedin_gap_gate,
@@ -86,6 +94,7 @@ from person_insights_store import (
     upsert_person_insight,
 )
 from db import connect, init_schema
+from migrations import migrate
 from enrichment_store import (
     DECISION_ACCEPT,
     DECISION_REVIEW,
@@ -117,6 +126,8 @@ from structuring import (
     structure_profile,
     synthesize_bio,
 )
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -330,6 +341,71 @@ MAX_CONSECUTIVE_ERRORS = 3
 _LINKEDIN_IN_RE = re.compile(r"https?://[^\s)\"']*linkedin\.com/in/[^\s)\"']+", re.I)
 
 
+def batch_label(
+    processed: int,
+    *,
+    name: str | None = None,
+    titan_class: int | None = None,
+    school: str | None = None,
+    ids: list[int] | None = None,
+    needs_deep: bool = False,
+    rerun_enriched: bool = False,
+) -> str:
+    """Cost-log label for this run. Re-research passes (deep / rerun / ids) get
+    their own prefixes so a $30 deep pass over 40 people isn't read later as a
+    40-person first-pass sweep when someone averages the log."""
+    if needs_deep:
+        return f"deep-{processed}"
+    if rerun_enriched:
+        return f"rerun-{processed}"
+    if ids:
+        return f"ids-{processed}"
+    if name:
+        return name
+    if titan_class is not None:
+        return f"{school or 'class'}-{titan_class}"
+    return f"enrich-{processed}"
+
+
+def running_usd(
+    *,
+    haiku_in: int,
+    haiku_out: int,
+    sonnet_in: int,
+    sonnet_out: int,
+    pdl_matches: int,
+    perplexity_requests: int,
+    sonar_requests: int,
+    sonar_usd: float,
+    est_credits: int,
+) -> float:
+    """Dollars spent so far in this run across every billed source (Claude both
+    models, PDL, Perplexity /search, Sonar, Firecrawl at the per-credit price of
+    the estimated count). Priced by the SAME build_entry the cost log uses, so
+    the --max-usd check and the logged total can never disagree."""
+    return build_entry(
+        label="running", people=0,
+        haiku_in=haiku_in, haiku_out=haiku_out,
+        sonnet_in=sonnet_in, sonnet_out=sonnet_out,
+        estimated_credits=est_credits, pdl_matches=pdl_matches,
+        perplexity_requests=perplexity_requests,
+        sonar_requests=sonar_requests, sonar_usd=sonar_usd,
+    ).total_usd
+
+
+def resolve_firecrawl_ceiling(credits_before: int | None, max_credits: int | None) -> int:
+    """Run-level Firecrawl deep-path ceiling. Defaults to the live balance so we
+    never plan to spend credits we don't have; --max-credits caps it lower. An
+    UNKNOWN balance (the meter call failed -> None) is treated as 0: better a
+    Firecrawl-free run than a TypeError before the first person, and better
+    than trusting a --max-credits we can't confirm the account holds."""
+    if credits_before is None:
+        return 0
+    if max_credits is None:
+        return max(0, credits_before)
+    return max(0, min(max_credits, credits_before))
+
+
 def _candidate_linkedin_url(claim_rows: list[ClaimRow]) -> str:
     """A concrete linkedin.com/in/ URL already present in the claims (PDL returns
     one; verified mentions sometimes do). Reading a KNOWN profile beats a blind
@@ -360,7 +436,15 @@ def _resolve_linkedin_seed(
     PDL on weak/ambiguous hits). Returns the chosen seed URL plus, when the
     search CORRECTED PDL's guess, a claim recording the corrected URL so the
     right profile is persisted even if the downstream read fails. Never raises —
-    a search outage degrades to PDL's URL alone."""
+    a search outage degrades to PDL's URL alone.
+
+    How firmly that claim is recorded depends on corroboration: a URL carried by
+    >= MIN_INDEPENDENT_HITS distinct search results is recorded as a real
+    linkedin_url (0.7); a single-result hit is recorded only as a low-confidence
+    SEARCH_UNVERIFIED_METHOD claim, to be PROMOTED by _promote_verified_seed if
+    the fail-closed verifier later accepts a read of that exact profile. Before
+    this split, a substring test on the chooser's reason string persisted any
+    single hit at 0.7 with no identity check at all."""
     pdl_url = _candidate_linkedin_url(claim_rows)
     employer = verified_employer or person.company or ""
     try:
@@ -368,7 +452,10 @@ def _resolve_linkedin_seed(
             http, perplexity_key, person.full_name,
             school=person.school or "", employer=employer,
         )
-    except Exception:
+    except AuthError:
+        raise  # a rejected Perplexity key is a run-level fault, not a search outage
+    except Exception as exc:  # noqa: BLE001 — degrade to PDL's URL, but say so
+        _log.warning("linkedin search failed for %s: %s", person.full_name, exc)
         candidates = []
     chosen, reason = choose_linkedin_url(pdl_url, candidates)
     if not chosen:
@@ -385,15 +472,53 @@ def _resolve_linkedin_seed(
     # fail-closed verifier judges it there); it just isn't persisted as fact.
     strongly_corroborated = "overrides" in reason or reason.startswith("search (")
     if strongly_corroborated and claim_rows:
-        corrected = ClaimRow(
-            claim_type="linkedin_url",
-            value=chosen,
-            source_url=chosen,
-            quote=f"search-resolved ({reason})",
-            confidence=0.7,
-            extraction_method="linkedin_search",
-        )
+        picked = next((c for c in candidates if c.url == chosen), None)
+        hits = picked.hits if picked is not None else 1
+        if hits >= MIN_INDEPENDENT_HITS:
+            corrected = ClaimRow(
+                claim_type="linkedin_url",
+                value=chosen,
+                source_url=chosen,
+                quote=f"search-resolved ({reason}; {hits} independent results)",
+                confidence=0.7,
+                extraction_method="linkedin_search",
+            )
+        else:
+            corrected = ClaimRow(
+                claim_type="linkedin_url",
+                value=chosen,
+                source_url=chosen,
+                quote=f"search-resolved, unverified ({reason}; single result)",
+                confidence=SEARCH_UNVERIFIED_CONFIDENCE,
+                extraction_method=SEARCH_UNVERIFIED_METHOD,
+            )
     return chosen, corrected
+
+
+def _promote_verified_seed(
+    claim_rows: list[ClaimRow], seed_url: str, li_pass: _LinkedInPass
+) -> list[ClaimRow]:
+    """After the fail-closed verifier ACCEPTED a read of `seed_url`, upgrade its
+    search-unverified linkedin_url claim to a verified one (0.7, linkedin_search).
+    The identity check the search never had has now happened. Pure; a no-op when
+    the read was skipped/rejected or landed on a different profile."""
+    if not li_pass.claim_rows or not seed_url:
+        return claim_rows
+    read_url = next((c.source_url for c in li_pass.claim_rows if c.source_url), "")
+    if _normalize_linkedin(read_url) != _normalize_linkedin(seed_url):
+        return claim_rows
+    return [
+        ClaimRow(
+            claim_type=c.claim_type, value=c.value, source_url=c.source_url,
+            quote="search-resolved, verified by linkedin_verify",
+            confidence=0.7, extraction_method="linkedin_search",
+        )
+        if c.claim_type == "linkedin_url"
+        and c.extraction_method == SEARCH_UNVERIFIED_METHOD
+        and _normalize_linkedin(c.value) == _normalize_linkedin(seed_url)
+        else c
+        for c in claim_rows
+    ]
 
 
 def _linkedin_pass(
@@ -749,6 +874,13 @@ def enrich_person(
             n_li_acc += len(li_pass.claim_rows)
             if li_pass.claim_rows:
                 claim_rows.extend(li_pass.claim_rows)
+        # The verifier accepted a read of the seeded profile — whether in the
+        # targeted pass just above or in the DEEP/REFRESH pre-PDL pass earlier —
+        # so the search guess is now identity-checked and its provenance row can
+        # say so. Pure + idempotent: a no-op when nothing was read or the read
+        # landed on a different profile.
+        if li_pass.claim_rows and li_seed_url:
+            claim_rows[:] = _promote_verified_seed(claim_rows, li_seed_url, li_pass)
 
         # 2b. PDL warm-anchor retry: the first PDL attempt missed, but a VERIFIED
         #     LinkedIn employer has since arrived and differs from the anchor we
@@ -1076,6 +1208,7 @@ def run(
     policy: ResearchPolicy = ResearchPolicy.BULK,
     needs_deep: bool = False,
     rerun_enriched: bool = False,
+    max_usd: float | None = None,
 ) -> int:
     # The deep pass targets base-sweep-flagged people and re-researches them
     # aggressively — force REFRESH so the LinkedIn read fires on the corrected
@@ -1090,8 +1223,8 @@ def run(
     # (PDL per match, Perplexity per search), so we read them once per run.
     # --no-pdl hard-disables PDL for the run regardless of the key — used when the
     # monthly match quota must be preserved for hand-picked fills.
-    pdl_key = None if no_pdl else os.getenv("PDL_API_KEY")
-    perplexity_key = os.getenv("PERPLEXITY_API_KEY")
+    pdl_key = None if no_pdl else optional_key("PDL_API_KEY")
+    perplexity_key = optional_key("PERPLEXITY_API_KEY")
 
     with connect(DB_PATH) as conn:
         init_schema(conn)
@@ -1099,6 +1232,7 @@ def run(
         init_person_insights_schema(conn)
         init_person_company_schema(conn)
         init_news_schema(conn)
+        migrate(conn)  # additive columns + schema_version stamp
         people = _load_targets(conn, limit, name, titan_class, school, ids,
                                needs_deep, rerun_enriched)
         if not people:
@@ -1117,8 +1251,13 @@ def run(
         # plan to spend credits we don't have; --max-credits lets the operator cap it
         # lower. Baseline discovery is Firecrawl-free, so this bounds the ONLY
         # Firecrawl spend in the run.
-        fc_ceiling = credits_before if max_credits is None else min(max_credits, credits_before)
-        fc_budget = FirecrawlBudget(fc_ceiling)
+        if credits_before is None:
+            print(
+                "WARNING: Firecrawl balance unknown (credit meter unavailable) — "
+                "treating it as 0 credits: this run is Firecrawl-free (deep path off).",
+                file=sys.stderr,
+            )
+        fc_budget = FirecrawlBudget(resolve_firecrawl_ceiling(credits_before, max_credits))
         print(f"Firecrawl deep-path budget for this run: {fc_budget.remaining} credits")
         est_credits = 0
         haiku_in = haiku_out = sonnet_in = sonnet_out = 0
@@ -1135,9 +1274,32 @@ def run(
         # into an error mark. Resets on any success.
         consecutive_errors = 0
         aborted_systemic = False
+        usd_capped = False
 
         with httpx.Client(timeout=30.0) as http:
             for person in people:
+                # Dollar ceiling, checked BEFORE each person (like the credit
+                # caps): the cap bounds total spend, and one in-flight person
+                # can overshoot by at most its own cost.
+                if max_usd is not None:
+                    spent = running_usd(
+                        haiku_in=haiku_in, haiku_out=haiku_out,
+                        sonnet_in=sonnet_in, sonnet_out=sonnet_out,
+                        pdl_matches=pdl_matches,
+                        perplexity_requests=perplexity_requests,
+                        sonar_requests=sonar_requests, sonar_usd=sonar_usd,
+                        est_credits=est_credits,
+                    )
+                    if spent >= max_usd:
+                        usd_capped = True
+                        print(
+                            f"\n\nCOST CAP ${max_usd:.2f} REACHED (${spent:.4f} after "
+                            f"{processed} people) — stopping cleanly before "
+                            f"{person.full_name}. Remaining people are left "
+                            "un-enriched (still pending) for a future run.",
+                            file=sys.stderr,
+                        )
+                        break
                 print(f"\n=== {person.full_name} | {person.company} | {person.city} ===")
                 try:
                     usage = enrich_person(
@@ -1191,6 +1353,23 @@ def run(
                     )
                     pdl_exhausted = True
                     break
+                except (AuthError, AuthenticationError, PermissionDeniedError) as exc:
+                    # A rejected API key never self-heals, so there is nothing to
+                    # gain from the circuit breaker's 3-strike tolerance: every
+                    # remaining person would fail identically. Abort at once and
+                    # leave this person pending (not error-marked — the key is at
+                    # fault, not the profile).
+                    conn.rollback()
+                    aborted_systemic = True
+                    print(
+                        f"\n\nAUTH FAILURE — run aborted immediately: {exc}\n"
+                        "A rejected key never self-heals, so no further people were "
+                        f"attempted. {person.full_name} and all remaining people are "
+                        "left un-enriched (still pending). Fix the key (python "
+                        "preflight.py checks each one) and re-run.",
+                        file=sys.stderr,
+                    )
+                    break
                 except Exception as exc:  # noqa: BLE001 - record and maybe continue
                     conn.rollback()
                     mark_phase(
@@ -1214,15 +1393,11 @@ def run(
                         break
 
     credits_after = remaining_credits(firecrawl)
-    if ids:
-        batch_label = f"deep-pass-{processed}"
-    else:
-        batch_label = name or (
-            f"{school or 'class'}-{titan_class}" if titan_class is not None
-            else f"enrich-{processed}"
-        )
     entry = build_entry(
-        label=batch_label,
+        label=batch_label(
+            processed, name=name, titan_class=titan_class, school=school, ids=ids,
+            needs_deep=needs_deep, rerun_enriched=rerun_enriched,
+        ),
         people=processed,
         haiku_in=haiku_in,
         haiku_out=haiku_out,
@@ -1250,11 +1425,14 @@ def run(
                 f"({fc_news_credits} Firecrawl credits)"
             )
     # Non-zero exits signal a hard stop so a wrapper/operator halts the sequence
-    # instead of marching on: 3 = PDL quota spent, 4 = systemic error abort.
+    # instead of marching on: 3 = PDL quota spent, 4 = systemic error abort
+    # (N consecutive errors, or a rejected API key), 5 = --max-usd cap reached.
     if pdl_exhausted:
         return 3
     if aborted_systemic:
         return 4
+    if usd_capped:
+        return 5
     return 0
 
 
@@ -1269,6 +1447,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-credits", dest="max_credits", type=int, default=None,
                    help="Hard ceiling on DEEP Firecrawl credits for this run "
                         "(baseline discovery is free); defaults to the live balance")
+    p.add_argument("--max-usd", dest="max_usd", type=float, default=None,
+                   help="Hard dollar ceiling for this run across every billed "
+                        "source (Claude, PDL, Perplexity, Sonar, Firecrawl); "
+                        "checked before each person, exit code 5 when reached")
     p.add_argument("--ids", default=None,
                    help="Comma-separated person IDs to (re-)enrich, e.g. '770,817'. "
                         "Bypasses the done-check: targets are rebuilt in place")
@@ -1305,6 +1487,14 @@ def _parse_ids(raw: str | None) -> list[int] | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Route every module's swallowed-failure warnings to stderr, once. Without
+    # this, the adapters' logger.warning calls (a failed reconcile, a dropped
+    # scrape, a cost-meter hiccup) are silently discarded by Python's default
+    # last-resort handler config and the run looks cleaner than it was.
+    logging.basicConfig(
+        level=logging.WARNING, stream=sys.stderr,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
     args = build_parser().parse_args(argv)
     if args.policy is not None:
         policy = ResearchPolicy.parse(args.policy)
@@ -1317,7 +1507,7 @@ def main(argv: list[str] | None = None) -> int:
                titan_class=args.titan_class, school=args.school,
                max_credits=args.max_credits, ids=_parse_ids(args.ids),
                no_pdl=args.no_pdl, policy=policy, needs_deep=args.needs_deep,
-               rerun_enriched=args.rerun_enriched)
+               rerun_enriched=args.rerun_enriched, max_usd=args.max_usd)
 
 
 if __name__ == "__main__":

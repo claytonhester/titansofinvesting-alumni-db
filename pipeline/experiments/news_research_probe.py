@@ -12,8 +12,8 @@ and what the strict Jina-verified curator keeps — plus the precise spend:
 
 Cost = Perplexity Sonar (authoritative usage.cost) + Haiku curate/verify tokens.
 
-    python news_research_probe.py --limit 8
-    python news_research_probe.py --name "Trent Aldana"
+    python -m experiments.news_research_probe --limit 8
+    python -m experiments.news_research_probe --name "Trent Aldana"
 """
 from __future__ import annotations
 

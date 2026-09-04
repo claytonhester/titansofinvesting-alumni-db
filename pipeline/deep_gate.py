@@ -44,8 +44,11 @@ class FirecrawlBudget:
     the only dependable control is pre-flight: stop firing once the budget is spent
     (one in-flight call can still overshoot by its own cost)."""
 
-    def __init__(self, total_credits: int) -> None:
-        self.remaining = max(0, total_credits)
+    def __init__(self, total_credits: int | None) -> None:
+        # None means "balance unknown" (the live meter errored). Treat it as
+        # zero rather than raising: a meter hiccup must degrade to a
+        # Firecrawl-free run, not crash the batch before the first person.
+        self.remaining = max(0, total_credits or 0)
 
     def decide(self) -> FirecrawlDecision:
         if self.remaining <= 0:

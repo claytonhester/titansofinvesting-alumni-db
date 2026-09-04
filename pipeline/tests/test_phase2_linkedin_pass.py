@@ -220,7 +220,8 @@ def test_gated_seed_refresh_still_bypasses_gate(monkeypatch):
 
 # --- search-reconciled seed resolution (the Jean-Luc fix) ----------------------
 
-from linkedin_search import LinkedInCandidate  # noqa: E402
+from linkedin_search import LinkedInCandidate, SEARCH_UNVERIFIED_METHOD  # noqa: E402
+from phase2_enrich import _LI_NOT_ATTEMPTED as _LI_NOT_ATTEMPTED_ALIAS  # noqa: E402
 from phase2_enrich import _resolve_linkedin_seed  # noqa: E402
 
 
@@ -230,9 +231,10 @@ def _stub_search(monkeypatch, candidates):
         lambda *a, **k: list(candidates))
 
 
-def test_resolve_seed_records_claim_when_search_corrects_pdl(monkeypatch):
-    # PDL guessed a wrong slug; a strongly-corroborated search hit overrides it
-    # and the corrected URL is recorded as a claim.
+def test_resolve_seed_single_hit_override_is_recorded_unverified(monkeypatch):
+    # PDL guessed a wrong slug; a strongly-corroborated search hit overrides it.
+    # Carried by ONE result and not yet identity-checked, it is recorded only
+    # as a low-confidence search-unverified claim (still seeds the read).
     pdl_claim = ClaimRow("public_links", "LinkedIn",
                          "https://linkedin.com/in/jean-luc-vandermeer", "", 0.8, "pdl")
     _stub_search(monkeypatch, [
@@ -242,7 +244,63 @@ def test_resolve_seed_records_claim_when_search_corrects_pdl(monkeypatch):
         object(), "key", _PERSON, [pdl_claim], verified_employer="JP Morgan")
     assert url == "https://linkedin.com/in/jlvandermeer"
     assert claim is not None and claim.value == url
-    assert claim.extraction_method == "linkedin_search"
+    assert claim.extraction_method == SEARCH_UNVERIFIED_METHOD
+    assert claim.confidence <= 0.4
+
+
+def test_resolve_seed_two_independent_hits_is_recorded_verified(monkeypatch):
+    # The same corrected slug carried by two DIFFERENT result pages (the
+    # profile itself + a firm bio linking to it) is corroborated -> real claim.
+    pdl_claim = ClaimRow("public_links", "LinkedIn",
+                         "https://linkedin.com/in/jean-luc-vandermeer", "", 0.8, "pdl")
+    _stub_search(monkeypatch, [
+        LinkedInCandidate("https://linkedin.com/in/jlvandermeer", 2.0,
+                          "name,employer", "search", hits=2)])
+    url, claim = _resolve_linkedin_seed(
+        object(), "key", _PERSON, [pdl_claim], verified_employer="JP Morgan")
+    assert url == "https://linkedin.com/in/jlvandermeer"
+    assert claim is not None and claim.extraction_method == "linkedin_search"
+    assert claim.confidence == 0.7
+
+
+# --- promotion once the fail-closed verifier accepts the seeded read ----------
+
+from phase2_enrich import _LinkedInPass, _promote_verified_seed  # noqa: E402
+
+
+def _unverified(url):
+    return ClaimRow("linkedin_url", url, url, "search-resolved, unverified",
+                    0.4, SEARCH_UNVERIFIED_METHOD)
+
+
+def test_verified_read_of_seed_promotes_unverified_claim():
+    seed = "https://linkedin.com/in/jlvandermeer"
+    rows = [ClaimRow("current_employer", "Acme", "", "", 0.9, "x"), _unverified(seed)]
+    li_pass = _LinkedInPass(
+        (ClaimRow("current_employer", "Acme", seed, "", 0.8, "firecrawl-linkedin"),),
+        "Acme", 40, 8, 3, True)
+    out = _promote_verified_seed(rows, seed, li_pass)
+    li = next(c for c in out if c.claim_type == "linkedin_url")
+    assert li.extraction_method == "linkedin_search" and li.confidence == 0.7
+    assert out[0] == rows[0]  # other claims untouched
+
+
+def test_rejected_or_skipped_read_leaves_claim_unverified():
+    seed = "https://linkedin.com/in/jlvandermeer"
+    rows = [_unverified(seed)]
+    assert _promote_verified_seed(rows, seed, _LI_NOT_ATTEMPTED_ALIAS) == rows
+    rejected = _LinkedInPass((), "", 40, 8, 3, True)  # attempted, verifier said no
+    assert _promote_verified_seed(rows, seed, rejected) == rows
+
+
+def test_verified_read_of_a_different_profile_does_not_promote():
+    seed = "https://linkedin.com/in/jlvandermeer"
+    other = "https://linkedin.com/in/someone-else"
+    rows = [_unverified(seed)]
+    li_pass = _LinkedInPass(
+        (ClaimRow("current_employer", "Acme", other, "", 0.8, "firecrawl-linkedin"),),
+        "Acme", 40, 8, 3, True)
+    assert _promote_verified_seed(rows, seed, li_pass) == rows
 
 
 def test_resolve_seed_no_claim_when_search_confirms_pdl(monkeypatch):

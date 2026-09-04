@@ -1,5 +1,16 @@
 # Insights Expansion — design spec
 
+> ## Status (2026-09-03)
+>
+> **Implemented.** PDL extras (industry, size, function, seniority, tenure, years
+> of experience, skills/certs as claims), the derived metrics, the python
+> `sector_classify.py` mirror, the landing-sector / cluster panels, and the chat
+> facets all shipped. **`years_to_md` / `reached_md` were superseded** by the
+> cross-industry seniority ladder in `pipeline/seniority_v2.py` (`reclassify_levels.py`
+> writes `peak_level`, `reached_manager` / `reached_senior_leadership`,
+> `years_to_manager` / `years_to_senior_leadership`, and the per-role trajectory
+> table). The rest of this spec is the original design note.
+
 Goal: capture the data already within reach (PDL extras we discard + zero-cost
 derivations) and wire it through the whole system — per-person profile, cohort
 Overview, and the grounded chat — without breaking the "never assert what we

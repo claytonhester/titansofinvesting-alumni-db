@@ -205,3 +205,19 @@ def test_deep_done_person_does_not_reflag_when_still_thin():
     conn.execute("UPDATE person_insights SET deep_search_done=1 WHERE person_id=1")
     recompute_completeness(conn, 1)
     assert _flag(conn) == (0, "")  # drained
+
+
+# --- search-unverified LinkedIn guesses never count as "profile found" --------
+
+def test_search_unverified_linkedin_url_does_not_count():
+    from linkedin_search import SEARCH_UNVERIFIED_METHOD
+    guess = ClaimRow("linkedin_url", "https://linkedin.com/in/jane-doe-9999",
+                     "https://linkedin.com/in/jane-doe-9999", "", 0.4,
+                     SEARCH_UNVERIFIED_METHOD)
+    assert compute_breakdown([_c("current_employer", "Acme"), guess]).has_linkedin is False
+
+
+def test_corroborated_search_linkedin_url_counts():
+    good = ClaimRow("linkedin_url", "https://linkedin.com/in/jane-doe",
+                    "https://linkedin.com/in/jane-doe", "", 0.7, "linkedin_search")
+    assert compute_breakdown([good]).has_linkedin is True
